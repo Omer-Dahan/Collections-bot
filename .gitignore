@@ -22,4 +22,3 @@ env/
 *.bak
 .idea/
 .vscode/
-.gitignore
