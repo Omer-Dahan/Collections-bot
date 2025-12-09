@@ -85,20 +85,34 @@ def reset_user_modes(context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop(key, None)
 
 
+def track_and_reset_user(user, context: ContextTypes.DEFAULT_TYPE):
+    """Track user in DB and reset all modes"""
+    reset_user_modes(context)
+    db.upsert_user(user.id, user.username, user.first_name, user.last_name)
+
+
+# Message constants
+MSG_NO_COLLECTIONS = "אין עדיין אוספים. צור אחד עם /newcollection."
+
+
+def build_collection_keyboard(collections, callback_prefix: str, add_back_button: bool = False):
+    """Build a keyboard with collection buttons"""
+    keyboard = [
+        [InlineKeyboardButton(text=f"📁 {name}", callback_data=f"{callback_prefix}:{col_id}")]
+        for col_id, name in collections
+    ]
+    if add_back_button:
+        keyboard.append([InlineKeyboardButton("⬅ חזור לתפריט ראשי", callback_data="back_to_main")])
+    return keyboard
+
+
 def get_user_keyboard():
-    """בניית מקלדת קבועה עם כל פקודות הבוט"""
+    """בניית מקלדת קבועה עם כפתור התחל בלבד"""
     return ReplyKeyboardMarkup(
-        [
-            [KeyboardButton("/newcollection")],
-            [KeyboardButton("/collections")],
-            [KeyboardButton("/browse")],
-            [KeyboardButton("/manage")],
-            [KeyboardButton("/remove")],
-            [KeyboardButton("/id_file")]
-        ],
+        [[KeyboardButton("/start")]],
         resize_keyboard=True,
         one_time_keyboard=False,
-        is_persistent=True
+        is_persistent=True,
     )
 
 
@@ -296,22 +310,51 @@ async def safe_send_media_group(bot, chat_id, media, reply_to_message_id=None):
             logger.error(f"Error sending media group: {e}")
 
 
-async def send_main_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text=(
-            "היי 🌟\n"
-            "ברוך הבא לבוט האוספים שלך.\n\n"
-            "📌 פקודות שימושיות:\n"
-            "• /newcollection - יצירת אוסף חדש\n"
-            "• /collections - בחירת אוסף פעיל\n"
-            "• /browse - דפדוף וצפייה בתוכן\n"
-            "• /manage - ניהול אוספים\n"
-            "• /remove - כניסה למצב מחיקה\n"
-            "• /id_file - מצב זיהוי file_id\n\n"
-            "✨ אחרי שאתה בוחר אוסף פעיל, כל וידאו, תמונה, מסמך או טקסט שתשלח יישמר אוטומטית."
-        ),
+def build_main_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📁 יצירת אוסף חדש", callback_data="main_menu:newcollection")],
+        [InlineKeyboardButton("⭐ בחירת אוסף פעיל", callback_data="main_menu:collections")],
+        [InlineKeyboardButton("📚 דפדוף וצפייה בתוכן", callback_data="main_menu:browse")],
+        [InlineKeyboardButton("➕ הוסף תוכן לאוסף", callback_data="main_menu:collections")],
+        [InlineKeyboardButton("🛠 ניהול אוספים", callback_data="main_menu:manage")],
+        [InlineKeyboardButton("🗑 מצב מחיקה", callback_data="main_menu:remove")],
+        [InlineKeyboardButton("🔍 זיהוי file_id", callback_data="main_menu:id_file")],
+    ])
+
+
+def get_main_menu_text() -> str:
+    """Get the main menu welcome text"""
+    return (
+        "היי, ברוך הבא לבוט שמירת האוספים שלך.\n"
+        "כאן אפשר לאסוף, לארגן ולמצוא כל תמונה, וידאו, מסמך או טקסט בצורה פשוטה ומהירה.\n"
+        "בחר פעולה מהתפריט למטה:"
     )
+
+
+async def send_main_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
+    text = get_main_menu_text()
+    keyboard = build_main_menu_keyboard()
+
+    msg_id = context.user_data.get("main_menu_msg_id")
+    if msg_id:
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=msg_id,
+                text=text,
+                reply_markup=keyboard,
+            )
+            return
+        except Exception:
+            # If edit fails (e.g. message deleted), fall through to send new
+            pass
+
+    msg = await context.bot.send_message(
+        chat_id=chat_id,
+        text=text,
+        reply_markup=keyboard,
+    )
+    context.user_data["main_menu_msg_id"] = msg.message_id
 
 def format_size(size: int | None) -> str:
     if not size:
@@ -486,7 +529,7 @@ def build_page_menu(
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    reset_user_modes(context)
+    track_and_reset_user(user, context)
     # Open to all users now
     # if not is_authorized(user.id):
     #     ...
@@ -496,82 +539,152 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not chat:
         return
     
-    # Track user
-    db.upsert_user(user.id, user.username, user.first_name, user.last_name)
-    
     logger.info("Saved item from user_id=%s username=%s", user.id, user.username)
 
-    await send_main_menu(chat.id, context)
+    # Update the reply keyboard to show only /start
+    # We do this with a temporary message that gets deleted
+    temp_msg = await update.message.reply_text(
+        "🔄",
+        reply_markup=get_user_keyboard(),
+    )
+    
+    # Delete the temporary message
+    try:
+        await context.bot.delete_message(chat_id=chat.id, message_id=temp_msg.message_id)
+    except Exception:
+        pass
+    
+    # Send the main menu message with inline keyboard
+    msg = await context.bot.send_message(
+        chat_id=chat.id,
+        text=get_main_menu_text(),
+        reply_markup=build_main_menu_keyboard(),
+    )
+    
+    # Store the message ID for future edits
+    context.user_data["main_menu_msg_id"] = msg.message_id
+
+
+async def new_collection_flow(message, user, context, args: list[str], edit_message_id: int = None):
+    if not args:
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅ חזור לתפריט ראשי", callback_data="back_to_main")]
+        ])
+        text = "כתוב שם לאוסף. לדוגמה:\n/newcollection טיול בולגריה"
+        
+        if edit_message_id:
+            await context.bot.edit_message_text(
+                chat_id=message.chat_id,
+                message_id=edit_message_id,
+                text=text,
+                reply_markup=keyboard
+            )
+        else:
+            await message.reply_text(text, reply_markup=keyboard)
+        return
+
+    name = " ".join(args)
+    try:
+        collection_id = db.create_collection(name, user.id)
+        active_collections[user.id] = collection_id
+        
+        # Auto-activate collection mode
+        keyboard = InlineKeyboardMarkup(
+            [[InlineKeyboardButton(text="🛑 הפסק הוספה", callback_data="stop_collect")]]
+        )
+        
+        await message.reply_text(
+            f"✅ אוסף חדש נוצר: {name}\n\n"
+            f"🔄 מתחיל מצב איסוף...\n"
+            f"העלה עכשיו קבצים (תמונות, סרטונים, מסמכים) והם יתווספו לאוסף.",
+            reply_markup=keyboard
+        )
+    except Exception as e:
+        logger.exception("Error creating collection")
+        await message.reply_text(f"שגיאה ביצירת אוסף: {e}")
 
 
 async def new_collection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    reset_user_modes(context)
-    # Track user
-    db.upsert_user(user.id, user.username, user.first_name, user.last_name)
+    track_and_reset_user(user, context)
     # Open to all users
 
+    await new_collection_flow(update.message, user, context, context.args)
 
-    if not context.args:
-        await update.message.reply_text("כתוב שם לאוסף. לדוגמה:\n/newcollection טיול בולגריה")
+
+async def list_collections_flow(message, user, context, edit_message_id: int = None):
+    collections = db.get_collections(user.id)
+    if not collections:
+        text = MSG_NO_COLLECTIONS
+        if edit_message_id:
+            await context.bot.edit_message_text(
+                chat_id=message.chat_id,
+                message_id=edit_message_id,
+                text=text
+            )
+        else:
+            await message.reply_text(text)
         return
 
-    name = " ".join(context.args)
-    try:
-        collection_id = db.create_collection(name, user.id)
-        active_collections[user.id] = collection_id
-        await update.message.reply_text(f"אוסף חדש נוצר: {name}\nהוא עכשיו האוסף הפעיל.")
-    except Exception as e:
-        logger.exception("Error creating collection")
-        await update.message.reply_text(f"שגיאה ביצירת אוסף: {e}")
+    keyboard = build_collection_keyboard(collections, "select_collection", add_back_button=True)
+    text = "בחר אוסף פעיל:"
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    if edit_message_id:
+        await context.bot.edit_message_text(
+            chat_id=message.chat_id,
+            message_id=edit_message_id,
+            text=text,
+            reply_markup=reply_markup
+        )
+    else:
+        await message.reply_text(text, reply_markup=reply_markup)
 
 
 async def list_collections(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    reset_user_modes(context)
-    # Track user
-    db.upsert_user(user.id, user.username, user.first_name, user.last_name)
+    track_and_reset_user(user, context)
     # Open to all users
+    
+    await list_collections_flow(update.message, user, context)
+
+
+async def manage_collections_flow(message, user, context, edit_message_id: int = None):
     collections = db.get_collections(user.id)
     if not collections:
-        await update.message.reply_text("אין עדיין אוספים. צור אחד עם /newcollection.")
+        text = MSG_NO_COLLECTIONS
+        if edit_message_id:
+            await context.bot.edit_message_text(
+                chat_id=message.chat_id,
+                message_id=edit_message_id,
+                text=text
+            )
+        else:
+            await message.reply_text(text)
         return
 
-    keyboard = [
-        [InlineKeyboardButton(text=name, callback_data=f"select_collection:{col_id}")]
-        for col_id, name in collections
-    ]
-
-    await update.message.reply_text(
-        "בחר אוסף פעיל:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
+    keyboard = build_collection_keyboard(collections, "manage_collection", add_back_button=True)
+    text = "בחר אוסף לניהול:"
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    if edit_message_id:
+        await context.bot.edit_message_text(
+            chat_id=message.chat_id,
+            message_id=edit_message_id,
+            text=text,
+            reply_markup=reply_markup
+        )
+    else:
+        await message.reply_text(text, reply_markup=reply_markup)
 
 
 async def manage_collections(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ניהול אוספים - ייצוא ומחיקה"""
     user = update.effective_user
-    reset_user_modes(context)
-    # Track user
-    db.upsert_user(user.id, user.username, user.first_name, user.last_name)
+    track_and_reset_user(user, context)
     # Open to all users
     
-    collections = db.get_collections(user.id)
-    if not collections:
-        await update.message.reply_text("אין עדיין אוספים. צור אחד עם /newcollection.")
-        return
-
-    keyboard = [
-        [InlineKeyboardButton(text=name, callback_data=f"manage_collection:{col_id}")]
-        for col_id, name in collections
-    ]
-
-    await update.message.reply_text(
-        "בחר אוסף לניהול:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-
-
+    await manage_collections_flow(update.message, user, context)
 
 async def handle_select_collection_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """בחירת אוסף פעיל לשמירה (לא קשור לדפדוף)"""
@@ -597,7 +710,7 @@ async def handle_select_collection_callback(update: Update, context: ContextType
     # Keep batch_status for all collections - don't reset when switching
 
     keyboard = InlineKeyboardMarkup(
-        [[InlineKeyboardButton(text="הפסק הוספה", callback_data="stop_collect")]]
+        [[InlineKeyboardButton(text="🛑 הפסק הוספה", callback_data="stop_collect")]]
     )
 
     await query.edit_message_text(
@@ -676,8 +789,9 @@ async def show_browse_menu(chat_id: int, user_id: int, context: ContextTypes.DEF
             await context.bot.send_message(chat_id=chat_id, text=text)
         return
 
+    # Browse needs special callback format with page number, so build manually
     keyboard = [
-        [InlineKeyboardButton(text=name, callback_data=f"browse_page:{col_id}:1")]
+        [InlineKeyboardButton(text=f"📁 {name}", callback_data=f"browse_page:{col_id}:1")]
         for col_id, name in collections
     ]
     
@@ -705,9 +819,7 @@ async def show_browse_menu(chat_id: int, user_id: int, context: ContextTypes.DEF
 async def browse(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """פקודת /browse - בחירת אוסף לדפדוף"""
     user = update.effective_user
-    reset_user_modes(context)
-    # Track user
-    db.upsert_user(user.id, user.username, user.first_name, user.last_name)
+    track_and_reset_user(user, context)
     # Open to all users
 
     await show_browse_menu(
@@ -1117,31 +1229,34 @@ async def handle_stop_collect_callback(update: Update, context: ContextTypes.DEF
     if user.id in active_collections:
         del active_collections[user.id]
 
-    await query.edit_message_text("הוספת פריטים נעצרה. אין כרגע אוסף פעיל.")
+    # Show main menu directly instead of separate message
+    await query.edit_message_text(
+        get_main_menu_text(),
+        reply_markup=build_main_menu_keyboard()
+    )
+    context.user_data["main_menu_msg_id"] = query.message.message_id
 
 
-async def remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    reset_user_modes(context)
-    if context.args:
-        arg = context.args[0]
+async def remove_flow(message, user, context, args: list[str], edit_message_id: int = None):
+    if args:
+        arg = args[0]
         try:
             item_id = int(arg)
         except ValueError:
-            await update.message.reply_text("ה id ששלחת לא מספר תקין.")
+            await message.reply_text("ה id ששלחת לא מספר תקין.")
             return
 
         deleted = db.delete_item_by_id(item_id, user.id)
         if deleted > 0:
-            await update.message.reply_text(f"נמחק פריט אחד עם id {item_id}.")
+            await message.reply_text(f"נמחק פריט אחד עם id {item_id}.")
         else:
-            await update.message.reply_text("לא נמצא פריט עם id הזה.")
+            await message.reply_text("לא נמצא פריט עם id הזה.")
         return
 
     # Check if user has any collections/items
     collections = db.get_collections(user.id)
     if not collections:
-        await update.message.reply_text("אין לך עדיין אוספים למחיקה. צור אוסף חדש כדי להתחיל.")
+        await message.reply_text("אין לך עדיין אוספים למחיקה. צור אוסף חדש כדי להתחיל.")
         return
         
     # Check if user has any items at all (optional, but good UX)
@@ -1150,7 +1265,7 @@ async def remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total_items += db.count_items_in_collection(col_id)
     
     if total_items == 0:
-        await update.message.reply_text("האוספים שלך ריקים. אין מה למחוק.")
+        await message.reply_text("האוספים שלך ריקים. אין מה למחוק.")
         return
 
     context.user_data["delete_mode"] = True
@@ -1160,12 +1275,82 @@ async def remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🚪 צא ממצב מחיקה", callback_data="exit_delete_mode")]
     ])
     
-    await update.message.reply_text(
+    text = (
         "מצב מחיקה פעיל.\n"
         "שלח עכשיו וידאו, תמונה, מסמך שברצונך למחוק מהמאגר\n"
-        "או שלח הודעת טקסט שמכילה רק מספר id פנימי למחיקה לפי id.",
-        reply_markup=keyboard
+        "או שלח הודעת טקסט שמכילה רק מספר id פנימי למחיקה לפי id."
     )
+    
+    if edit_message_id:
+        await context.bot.edit_message_text(
+            chat_id=message.chat_id,
+            message_id=edit_message_id,
+            text=text,
+            reply_markup=keyboard
+        )
+    else:
+        await message.reply_text(text, reply_markup=keyboard)
+
+
+async def remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    reset_user_modes(context)
+    
+    await remove_flow(update.message, user, context, context.args)
+
+
+async def id_file_flow(message, user, context, edit_message_id: int = None):
+    context.user_data["id_mode"] = True
+    text = (
+        "מצב זיהוי קבצים הופעל.\n"
+        "שלח עכשיו וידאו, תמונה או מסמך כדי לקבל את ה file_id שלו,\n"
+        "או שלח לי טקסט שהוא file_id ואני אנסה לשלוח את הקובץ חזרה.\n"
+    )
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⬅ חזור לתפריט ראשי", callback_data="back_to_main")]
+    ])
+    
+    if edit_message_id:
+        await context.bot.edit_message_text(
+            chat_id=message.chat_id,
+            message_id=edit_message_id,
+            text=text,
+            reply_markup=keyboard
+        )
+    else:
+        await message.reply_text(text, reply_markup=keyboard)
+
+
+async def id_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    reset_user_modes(context)
+    await id_file_flow(update.message, user, context)
+
+
+async def handle_main_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    user = query.from_user
+    action = query.data.split(":")[1]
+    message_id = query.message.message_id
+    
+    # Reset modes before entering new flow, just like /commands do
+    reset_user_modes(context)
+    
+    if action == "newcollection":
+        await new_collection_flow(query.message, user, context, args=[], edit_message_id=message_id)
+    elif action == "collections":
+        await list_collections_flow(query.message, user, context, edit_message_id=message_id)
+    elif action == "browse":
+        await show_browse_menu(query.message.chat_id, user.id, context, edit_message_id=message_id)
+    elif action == "manage":
+        await manage_collections_flow(query.message, user, context, edit_message_id=message_id)
+    elif action == "remove":
+        await remove_flow(query.message, user, context, args=[], edit_message_id=message_id)
+    elif action == "id_file":
+        await id_file_flow(query.message, user, context, edit_message_id=message_id)
 
 
 async def handle_send_collection_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -1432,18 +1617,6 @@ async def handle_delete_message(update: Update, context: ContextTypes.DEFAULT_TY
             "לא נמצא קובץ תואם במאגר.",
             reply_markup=delete_mode_keyboard
         )
-
-
-async def id_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    reset_user_modes(context)
-    context.user_data["id_mode"] = True
-
-    await update.message.reply_text(
-        "מצב זיהוי קבצים הופעל.\n"
-        "שלח עכשיו וידאו, תמונה או מסמך כדי לקבל את ה file_id שלו,\n"
-        "או שלח לי טקסט שהוא file_id ואני אנסה לשלוח את הקובץ חזרה.\n"
-    )
 
 
 async def handle_id_file_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1850,13 +2023,10 @@ async def handle_back_to_manage_callback(update: Update, context: ContextTypes.D
     
     collections = db.get_collections(user.id)
     if not collections:
-        await query.edit_message_text("אין עדיין אוספים. צור אחד עם /newcollection.")
+        await query.edit_message_text(MSG_NO_COLLECTIONS)
         return
     
-    keyboard = [
-        [InlineKeyboardButton(text=name, callback_data=f"manage_collection:{col_id}")]
-        for col_id, name in collections
-    ]
+    keyboard = build_collection_keyboard(collections, "manage_collection", add_back_button=True)
     
     await query.edit_message_text(
         "בחר אוסף לניהול:",
@@ -1869,8 +2039,7 @@ async def handle_back_to_manage_callback(update: Update, context: ContextTypes.D
 async def access_shared(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Command to access a shared collection via code"""
     user = update.effective_user
-    reset_user_modes(context)
-    db.upsert_user(user.id, user.username, user.first_name, user.last_name)
+    track_and_reset_user(user, context)
     
     # Set mode to wait for share code
     context.user_data["waiting_for_share_code"] = True
@@ -1977,6 +2146,7 @@ async def handle_exit_shared_collection_callback(update: Update, context: Contex
         "✅ יצאת מהאוסף המשותף.\n\n"
         "השתמש ב-/browse לצפייה באוספים שלך."
     )
+    await send_main_menu(query.message.chat_id, context)
 
 
 async def handle_cancel_share_access_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2005,6 +2175,7 @@ async def handle_delete_confirmation(update: Update, context: ContextTypes.DEFAU
         
         if success:
             await update.message.reply_text("✅ האוסף נמחק בהצלחה!")
+            await send_main_menu(update.message.chat_id, context)
         else:
             await update.message.reply_text("❌ שגיאה במחיקת האוסף.")
         
@@ -2025,7 +2196,12 @@ async def handle_exit_delete_mode_callback(update: Update, context: ContextTypes
     
     context.user_data.pop("delete_mode", None)
     
-    await query.edit_message_text("✅ יצאת ממצב מחיקה.")
+    # Show main menu directly instead of separate message
+    await query.edit_message_text(
+        get_main_menu_text(),
+        reply_markup=build_main_menu_keyboard()
+    )
+    context.user_data["main_menu_msg_id"] = query.message.message_id
 
 
 async def handle_delete_choose_collection_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2041,7 +2217,7 @@ async def handle_delete_choose_collection_callback(update: Update, context: Cont
         return
     
     keyboard = [
-        [InlineKeyboardButton(text=name, callback_data=f"browse_page:{col_id}:1")]
+        [InlineKeyboardButton(text=f"📁 {name}", callback_data=f"browse_page:{col_id}:1")]
         for col_id, name in collections
     ]
     keyboard.append([InlineKeyboardButton("🚪 צא ממצב מחיקה", callback_data="exit_delete_mode")])
@@ -2051,7 +2227,6 @@ async def handle_delete_choose_collection_callback(update: Update, context: Cont
         "(מצב המחיקה עדיין פעיל - שלח קובץ למחיקה)",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-
 
 def main():
 
@@ -2083,6 +2258,7 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_batch_status_callback, pattern=r"^batch_status:"))
     app.add_handler(CallbackQueryHandler(handle_stop_collect_callback, pattern=r"^stop_collect$"))
     app.add_handler(CallbackQueryHandler(handle_back_to_main_callback, pattern=r"^back_to_main$"))
+    app.add_handler(CallbackQueryHandler(handle_main_menu_button, pattern=r"^main_menu:"))
     
     # New handler for back to browse
     async def handle_back_to_browse(update: Update, context: ContextTypes.DEFAULT_TYPE):
