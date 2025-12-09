@@ -20,3 +20,6 @@ env/
 
 # Backup files
 *.bak
+.idea/
+.vscode/
+.gitignore
