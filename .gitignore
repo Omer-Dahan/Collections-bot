@@ -1,0 +1,22 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Local database, sensitive data
+bot_data.db
+
+# Log files
+*.log
+
+# Windows batch files
+*.bat
+
+# Token config, credentials
+config.py
+
+# Virtual environments
+venv/
+env/
+
+# Backup files
+*.bak
