@@ -23,11 +23,13 @@ A powerful Telegram bot that helps you store, organize, browse, share, and manag
 git clone https://github.com/Omer-Dahan/Collections-bot
 cd your_repo
 ```
+
 ### 2️⃣ Create virtual environment
 Copy code
 ```bash
 python -m venv venv
 ```
+
 ### 3️⃣ Activate it
 Windows:
 Copy code
@@ -39,11 +41,12 @@ Copy code
 ```bash
 source venv/bin/activate
 ```
+
 ### 4️⃣ Install dependencies
 ```bash
-
 pip install -r requirements.txt
 ```
+
 ### 5️⃣ Run the bot
 Copy code
 ```bash
@@ -52,10 +55,12 @@ python bot.py
 ```
 ### 🧱 Project Structure
 
-    📁 Collections bot/
-    ├── 🧠 bot.py
-    ├── 🛠 admin_panel.py
-    ├── 🗄 db.py
-    ├── 📦 requirements.txt
-    └── 📘 README.md
+📁 project/
+├── 🧠 bot.py
+├── 🛠 admin_panel.py
+├── 🗄 db.py
+├── 📦 requirements.txt
+└── 📘 README.md
+
+
 
