@@ -54,14 +54,13 @@ Copy code
 python bot.py
 ```
 ### 🧱 Project Structure
-```
+
 📁 project/
 ├── 🧠 bot.py
 ├── 🛠 admin_panel.py
 ├── 🗄 db.py
 ├── 📦 requirements.txt
 └── 📘 README.md
-```
 
 ⚙️ Configuration
 
@@ -69,7 +68,6 @@ The bot uses a simple configuration file named config.py containing all runtime 
 This file is not included in the repository for security reasons and must be created manually.
 
 Example config.py
-```
 BOT_TOKEN = "your_bot_token_here"
 
 # Admin list for advanced operations and visibility
@@ -80,7 +78,7 @@ MAX_CAPTION_LENGTH = 800
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
-```
+
 What configuration controls
 
 Telegram authentication
