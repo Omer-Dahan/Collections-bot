@@ -52,13 +52,10 @@ python bot.py
 ```
 ### 🧱 Project Structure
 
-```txt
-📁 project/
-├── 🧠 bot.py
-├── 🛠 admin_panel.py
-├── 🗄 db.py
-├── 📦 requirements.txt
-└── 📘 README.md
-```
-
+    📁 Collections bot/
+    ├── 🧠 bot.py
+    ├── 🛠 admin_panel.py
+    ├── 🗄 db.py
+    ├── 📦 requirements.txt
+    └── 📘 README.md
 
