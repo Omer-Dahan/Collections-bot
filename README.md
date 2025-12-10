@@ -28,9 +28,16 @@ bash
 Copy code
 python -m venv venv
 3. Activate it
+Windows:
+
 bash
 Copy code
 venv\Scripts\activate
+Linux or macOS:
+
+bash
+Copy code
+source venv/bin/activate
 4. Install dependencies
 bash
 Copy code
@@ -40,6 +47,7 @@ bash
 Copy code
 python bot.py
 🧱 Project Structure
+text
 Copy code
 project/
 ├── bot.py
@@ -50,4 +58,4 @@ project/
 yaml
 Copy code
 
----
+--
