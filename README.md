@@ -20,7 +20,7 @@ A powerful Telegram bot that helps you store, organize, browse, share, and manag
 
 ### 1️⃣ Clone the project
 ```bash
-git clone https://github.com/your_username/your_repo.git
+git clone https://github.com/Omer-Dahan/Collections-bot
 cd your_repo
 ```
 ### 2️⃣ Create virtual environment
@@ -30,35 +30,36 @@ python -m venv venv
 ```
 ### 3️⃣ Activate it
 Windows:
-
-```bash
 Copy code
+```bash
 venv\Scripts\activate
 ```
 Linux or macOS:
-
-```bash
 Copy code
+```bash
 source venv/bin/activate
 ```
 ### 4️⃣ Install dependencies
 ```bash
-Copy code
+
 pip install -r requirements.txt
 ```
 ### 5️⃣ Run the bot
+Copy code
 ```bash
 Copy code
 python bot.py
 ```
 ### 🧱 Project Structure
-text
-Copy code
-project/
-├── bot.py
-├── admin_panel.py
-├── db.py
-├── requirements.txt
-└── README.md
-yaml
-Copy code
+
+
+```txt
+📁 project/
+├── 🧠 bot.py
+├── 🛠 admin_panel.py
+├── 🗄 db.py
+├── 📦 requirements.txt
+└── 📘 README.md
+```
+
+
