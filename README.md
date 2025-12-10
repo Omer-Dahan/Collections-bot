@@ -16,18 +16,17 @@ A powerful Telegram bot that helps you store, organize, browse, share, and manag
 - Usage analytics
 
 ---
-
 ## 🚀 Installation
 
-### 1. Clone the project
+### 1️⃣ Clone the project
 ```bash
 git clone https://github.com/your_username/your_repo.git
 cd your_repo
-2. Create virtual environment
+### 2️⃣ Create virtual environment
 bash
 Copy code
 python -m venv venv
-3. Activate it
+### 3️⃣ Activate it
 Windows:
 
 bash
@@ -38,15 +37,15 @@ Linux or macOS:
 bash
 Copy code
 source venv/bin/activate
-4. Install dependencies
+### 4️⃣ Install dependencies
 bash
 Copy code
 pip install -r requirements.txt
-5. Run the bot
+### 5️⃣ Run the bot
 bash
 Copy code
 python bot.py
-🧱 Project Structure
+### 🧱 Project Structure
 text
 Copy code
 project/
@@ -57,5 +56,3 @@ project/
 └── README.md
 yaml
 Copy code
-
---
