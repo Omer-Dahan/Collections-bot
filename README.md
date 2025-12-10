@@ -22,7 +22,7 @@ A powerful Telegram bot that helps you store, organize, browse, share, and manag
 ### 1️⃣ *Clone the project*
 ```
 git clone https://github.com/Omer-Dahan/Collections-bot
-cd your_repo
+cd Collections-bot
 ```
 
 ### 2️⃣ *Create virtual environment*
@@ -54,7 +54,7 @@ python bot.py
 
 ## 🧱 *Project Structure*
 ```
-📁 project/
+📁 Collections-bot/
 ├── 🧠 bot.py
 ├── 🛠 admin_panel.py
 ├── 📝 db.py

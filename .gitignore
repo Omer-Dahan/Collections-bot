@@ -14,10 +14,6 @@ bot_data.db
 # Token config, credentials
 config.py
 
-# Virtual environments
-venv/
-env/
-
 # Backup files
 *.bak
 .idea/

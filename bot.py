@@ -424,7 +424,7 @@ async def update_batch_status(message, context: ContextTypes.DEFAULT_TYPE, colle
     # ==========================================================================
     # PHASE 2: After 5 seconds - show count for the first time
     # ==========================================================================
-    if phase == 1 and (current_time - last_update) >= 5:
+    if phase == 1 and (current_time - last_fresh_message_time) >= 1:
         # Build status message with count
         text = f'נאספו עד עכשיו {count} קבצים לאוסף "{collection_name}"'
         
@@ -465,9 +465,9 @@ async def update_batch_status(message, context: ContextTypes.DEFAULT_TYPE, colle
         
         # Check if we should send a fresh message (50-file rule with 25-second gate)
         should_send_fresh = (
-            count % 50 == 0 and 
+            count % 30 == 0 and 
             count > 1 and 
-            (current_time - last_fresh_message_time) >= 25
+            (current_time - last_fresh_message_time) >= 15
         )
         
         if should_send_fresh:
