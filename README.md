@@ -32,17 +32,18 @@ python -m venv venv
 
 ### 3️⃣ Activate it
 Windows:
-Copy code
+
 ```bash
 venv\Scripts\activate
 ```
 Linux or macOS:
-Copy code
+
 ```bash
 source venv/bin/activate
 ```
 
 ### 4️⃣ Install dependencies
+Copy code
 ```bash
 pip install -r requirements.txt
 ```
