@@ -371,10 +371,9 @@ def format_size(size: int | None) -> str:
 
 
 async def update_batch_status(message, context: ContextTypes.DEFAULT_TYPE, collection_name: str):
-    """עדכון הודעת סטטוס איסוף קבצים"""
+    """עדכון הודעת סטטוס איסוף קבצים - מערכת phase-based"""
     user_id = message.from_user.id
-    # No auth check needed for batch status updates as they are tied to active session
-
+    
     # Get active collection for this user
     if user_id not in active_collections:
         return
@@ -391,7 +390,9 @@ async def update_batch_status(message, context: ContextTypes.DEFAULT_TYPE, colle
         user_data["batch_status"][collection_id] = {
             "count": 0,
             "msg_id": None,
-            "last_update": 0.0
+            "last_update": 0.0,
+            "last_fresh_message_time": 0.0,
+            "phase": 0
         }
     
     # Get collection-specific status
@@ -400,39 +401,41 @@ async def update_batch_status(message, context: ContextTypes.DEFAULT_TYPE, colle
     count = status["count"]
     msg_id = status["msg_id"]
     last_update = status["last_update"]
+    phase = status.get("phase", 0)
+    last_fresh_message_time = status.get("last_fresh_message_time", 0.0)
     
     chat_id = message.chat_id
-    text = f'נוספו קבצים לאוסף✅ "{collection_name}":\nנשמרו עד עכשיו {count} פריטים.'
-    
-    # כפתורים: סטטוס והפסק הוספה
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("📊 סטטוס", callback_data=f"batch_status:{count}"),
-            InlineKeyboardButton("🛑 הפסק הוספה", callback_data="stop_collect")
-        ]
-    ])
-
-    # Time-based gating: update only if 10 seconds have passed or it's the first message
-    # Also send new message every 30 items to keep it at bottom of chat
     current_time = datetime.now().timestamp()
-    time_since_last_update = current_time - last_update
-    should_update = (time_since_last_update >= 10) or (count == 1)
-    should_send_new = (count % 30 == 0) and (count > 1)
-
-    if msg_id is None:
-        status_msg = await message.reply_text(text, reply_markup=keyboard)
+    
+    # ==========================================================================
+    # PHASE 1: First file - send initial message without count
+    # ==========================================================================
+    if phase == 0:
+        # Send initial message
+        initial_text = f'תהליך קליטת הקבצים החל לאוסף "{collection_name}"...'
+        
+        status_msg = await message.reply_text(initial_text)
         status["msg_id"] = status_msg.message_id
+        status["phase"] = 1
         status["last_update"] = current_time
-    elif should_send_new:
-        # Send new message every 30 items to keep it at bottom
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-        except Exception:
-            pass
-        status_msg = await message.reply_text(text, reply_markup=keyboard)
-        status["msg_id"] = status_msg.message_id
-        status["last_update"] = current_time
-    elif should_update:
+        status["last_fresh_message_time"] = current_time
+        return  # No further updates in this phase
+    
+    # ==========================================================================
+    # PHASE 2: After 5 seconds - show count for the first time
+    # ==========================================================================
+    if phase == 1 and (current_time - last_update) >= 5:
+        # Build status message with count
+        text = f'נאספו עד עכשיו {count} קבצים לאוסף "{collection_name}"'
+        
+        # Add buttons
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📊 סטטוס", callback_data=f"batch_status:{count}"),
+                InlineKeyboardButton("🛑 הפסק הוספה", callback_data="stop_collect")
+            ]
+        ])
+        
         try:
             await context.bot.edit_message_text(
                 chat_id=chat_id,
@@ -440,16 +443,83 @@ async def update_batch_status(message, context: ContextTypes.DEFAULT_TYPE, colle
                 text=text,
                 reply_markup=keyboard,
             )
+            status["phase"] = 2
             status["last_update"] = current_time
         except Exception:
-            # If edit fails (e.g. message deleted), send new one
+            # If edit fails, send new message
+            try:
+                status_msg = await message.reply_text(text, reply_markup=keyboard)
+                status["msg_id"] = status_msg.message_id
+                status["phase"] = 2
+                status["last_update"] = current_time
+                status["last_fresh_message_time"] = current_time
+            except Exception:
+                pass
+        return
+    
+    # ==========================================================================
+    # PHASE 3: Periodic updates - only if count changed
+    # ==========================================================================
+    if phase == 2:
+        time_since_last_update = current_time - last_update
+        
+        # Check if we should send a fresh message (50-file rule with 25-second gate)
+        should_send_fresh = (
+            count % 50 == 0 and 
+            count > 1 and 
+            (current_time - last_fresh_message_time) >= 25
+        )
+        
+        if should_send_fresh:
+            # Delete old message and send fresh one
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+            except Exception:
+                pass
+            
+            text = f'נאספו עד עכשיו {count} קבצים לאוסף "{collection_name}"'
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("📊 סטטוס", callback_data=f"batch_status:{count}"),
+                    InlineKeyboardButton("🛑 הפסק הוספה", callback_data="stop_collect")
+                ]
+            ])
+            
             try:
                 status_msg = await message.reply_text(text, reply_markup=keyboard)
                 status["msg_id"] = status_msg.message_id
                 status["last_update"] = current_time
-
+                status["last_fresh_message_time"] = current_time
             except Exception:
                 pass
+        
+        # Update every 5 seconds if count changed since last update
+        elif time_since_last_update >= 5:
+            text = f'נאספו עד עכשיו {count} קבצים לאוסף "{collection_name}"'
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("📊 סטטוס", callback_data=f"batch_status:{count}"),
+                    InlineKeyboardButton("🛑 הפסק הוספה", callback_data="stop_collect")
+                ]
+            ])
+            
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=msg_id,
+                    text=text,
+                    reply_markup=keyboard,
+                )
+                status["last_update"] = current_time
+            except Exception:
+                # If edit fails (e.g. message deleted), send new one
+                try:
+                    status_msg = await message.reply_text(text, reply_markup=keyboard)
+                    status["msg_id"] = status_msg.message_id
+                    status["last_update"] = current_time
+                    status["last_fresh_message_time"] = current_time
+                except Exception:
+                    pass
 
 
 async def delete_message_after_delay(bot, chat_id: int, message_id: int, delay: int):
@@ -2142,11 +2212,17 @@ async def handle_exit_shared_collection_callback(update: Update, context: Contex
     if user.id in active_shared_collections:
         active_shared_collections.pop(user.id)
     
+    # Edit existing message to main menu instead of sending new message
+    text = get_main_menu_text()
+    keyboard = build_main_menu_keyboard()
+    
     await query.edit_message_text(
-        "✅ יצאת מהאוסף המשותף.\n\n"
-        "השתמש ב-/browse לצפייה באוספים שלך."
+        text=text,
+        reply_markup=keyboard
     )
-    await send_main_menu(query.message.chat_id, context)
+    
+    # Update main_menu_msg_id to reference this message for future edits
+    context.user_data["main_menu_msg_id"] = query.message.message_id
 
 
 async def handle_cancel_share_access_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
