@@ -1510,6 +1510,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if message.video:
         video = message.video
+        
+        # Check for duplicates
+        if db.is_duplicate_file(collection_id, video.file_id, video.file_size):
+            logger.info(
+                "Duplicate file skipped: user_id=%s collection_id=%s type=video file_id=%s file_size=%s",
+                user.id, collection_id, video.file_id, video.file_size
+            )
+            return  # Skip silently
+        
         db.add_item(
             collection_id,
             content_type="video",
@@ -1521,6 +1530,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         saved = True
     elif message.photo:
         photo_size = message.photo[-1]
+        
+        # Check for duplicates
+        if db.is_duplicate_file(collection_id, photo_size.file_id, photo_size.file_size):
+            logger.info(
+                "Duplicate file skipped: user_id=%s collection_id=%s type=photo file_id=%s file_size=%s",
+                user.id, collection_id, photo_size.file_id, photo_size.file_size
+            )
+            return  # Skip silently
+        
         db.add_item(
             collection_id,
             content_type="photo",
@@ -1532,6 +1550,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         saved = True
     elif message.document:
         doc = message.document
+        
+        # Check for duplicates
+        if db.is_duplicate_file(collection_id, doc.file_id, doc.file_size):
+            logger.info(
+                "Duplicate file skipped: user_id=%s collection_id=%s type=document file_id=%s file_size=%s",
+                user.id, collection_id, doc.file_id, doc.file_size
+            )
+            return  # Skip silently
+        
         db.add_item(
             collection_id,
             content_type="document",
@@ -1543,6 +1570,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         saved = True
     elif message.audio:
         audio = message.audio
+        
+        # Check for duplicates
+        if db.is_duplicate_file(collection_id, audio.file_id, audio.file_size):
+            logger.info(
+                "Duplicate file skipped: user_id=%s collection_id=%s type=audio file_id=%s file_size=%s",
+                user.id, collection_id, audio.file_id, audio.file_size
+            )
+            return  # Skip silently
+        
         db.add_item(
             collection_id,
             content_type="audio",

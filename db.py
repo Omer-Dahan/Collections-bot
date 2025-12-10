@@ -175,6 +175,45 @@ def add_item(
     conn.close()
 
 
+def is_duplicate_file(collection_id: int, file_id: str, file_size: int | None) -> bool:
+    """
+    Check if a file with the same file_id and file_size already exists in the collection.
+    
+    Args:
+        collection_id: Collection ID to check within
+        file_id: Telegram file_id
+        file_size: File size in bytes
+        
+    Returns:
+        True if duplicate found, False otherwise
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    
+    # If file_size is None, only check file_id
+    if file_size is None:
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM items 
+            WHERE collection_id = ? AND file_id = ? AND file_size IS NULL
+            """,
+            (collection_id, file_id)
+        )
+    else:
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM items 
+            WHERE collection_id = ? AND file_id = ? AND file_size = ?
+            """,
+            (collection_id, file_id, file_size)
+        )
+    
+    count = cur.fetchone()[0]
+    conn.close()
+    
+    return count > 0
+
+
 def get_items_by_collection(collection_id: int, offset: int = 0, limit: int = 10) -> list:
     conn = get_connection()
     cur = conn.cursor()
