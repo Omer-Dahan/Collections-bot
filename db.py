@@ -52,8 +52,9 @@ def init_db():
     cur.execute("""
     CREATE TABLE IF NOT EXISTS collections (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL UNIQUE,
-        user_id INTEGER NOT NULL
+        name TEXT NOT NULL,
+        user_id INTEGER NOT NULL,
+        UNIQUE(name, user_id)
     )
     """)
 
@@ -286,14 +287,43 @@ def delete_all_items_in_collection(collection_id: int) -> int:
 
 
 def delete_collection(collection_id: int) -> bool:
-    """מחיקת אוסף (רק אם אין בו פריטים)"""
+    """מחיקת אוסף (לאחר מחיקת כל הפריטים)"""
+    import logging
+    logger = logging.getLogger(__name__)
+    
     conn = get_connection()
     cur = conn.cursor()
     try:
+        # Step 1: Delete access logs for share codes of this collection
+        cur.execute("""
+            DELETE FROM shared_collection_access_log 
+            WHERE share_code IN (
+                SELECT share_code FROM shared_collections 
+                WHERE collection_id = ?
+            )
+        """, (collection_id,))
+        deleted_logs = cur.rowcount
+        if deleted_logs > 0:
+            logger.info(f"Deleted {deleted_logs} access log(s) for collection {collection_id}")
+        
+        # Step 2: Delete any shared_collections records
+        cur.execute("DELETE FROM shared_collections WHERE collection_id = ?", (collection_id,))
+        deleted_shares = cur.rowcount
+        if deleted_shares > 0:
+            logger.info(f"Deleted {deleted_shares} share record(s) for collection {collection_id}")
+        
+        # Step 3: Delete the collection itself
         cur.execute("DELETE FROM collections WHERE id = ?", (collection_id,))
         conn.commit()
         success = cur.rowcount > 0
-    except Exception:
+        
+        if success:
+            logger.info(f"Successfully deleted collection {collection_id}")
+        else:
+            logger.warning(f"No collection found with id {collection_id}")
+            
+    except Exception as e:
+        logger.error(f"Error deleting collection {collection_id}: {type(e).__name__}: {e}")
         success = False
     finally:
         conn.close()

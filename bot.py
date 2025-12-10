@@ -653,7 +653,11 @@ async def new_collection_flow(message, user, context, args: list[str], edit_mess
         )
     except Exception as e:
         logger.exception("Error creating collection")
-        await message.reply_text(f"שגיאה ביצירת אוסף: {e}")
+        # Check if it's a duplicate name error
+        if "UNIQUE constraint failed" in str(e):
+            await message.reply_text(f"❌ כבר יש לך אוסף בשם '{name}'.\nבחר שם אחר.")
+        else:
+            await message.reply_text(f"שגיאה ביצירת אוסף: {e}")
 
 
 async def new_collection(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2250,17 +2254,22 @@ async def handle_delete_confirmation(update: Update, context: ContextTypes.DEFAU
     if is_valid and data:
         collection_id = data["collection_id"]
         
+        logger.info(f"User {update.message.from_user.id} confirmed deletion of collection {collection_id}")
+        
         # Delete all items first
-        db.delete_all_items_in_collection(collection_id)
+        items_deleted = db.delete_all_items_in_collection(collection_id)
+        logger.info(f"Deleted {items_deleted} items from collection {collection_id}")
         
         # Delete collection
         success = db.delete_collection(collection_id)
         
         if success:
+            logger.info(f"Collection {collection_id} successfully deleted by user {update.message.from_user.id}")
             await update.message.reply_text("✅ האוסף נמחק בהצלחה!")
             await send_main_menu(update.message.chat_id, context)
         else:
-            await update.message.reply_text("❌ שגיאה במחיקת האוסף.")
+            logger.error(f"Failed to delete collection {collection_id} - check db.py logs for details")
+            await update.message.reply_text("❌ שגיאה במחיקת האוסף. נא לנסות שוב או ליצור קשר עם התמיכה.")
         
         return True
     
