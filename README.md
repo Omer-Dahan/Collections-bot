@@ -57,7 +57,8 @@ python bot.py
 📁 project/
 ├── 🧠 bot.py
 ├── 🛠 admin_panel.py
-├── 🗄 db.py
+├── 📝 db.py
+├── ⚙️ config.py
 ├── 📦 requirements.txt
 └── 📘 README.md
 ```
