@@ -11,6 +11,10 @@ bot_data.db
 # Windows batch files
 *.bat
 
+# Virtual environments
+venv/
+env/
+
 # Token config, credentials
 config.py
 

@@ -407,11 +407,8 @@ async def update_batch_status(message, context: ContextTypes.DEFAULT_TYPE, colle
     chat_id = message.chat_id
     current_time = datetime.now().timestamp()
     
-    # ==========================================================================
     # PHASE 1: First file - send initial message without count
-    # ==========================================================================
     if phase == 0:
-        # Send initial message
         initial_text = f'תהליך קליטת הקבצים החל לאוסף "{collection_name}"...'
         
         status_msg = await message.reply_text(initial_text)
@@ -419,16 +416,12 @@ async def update_batch_status(message, context: ContextTypes.DEFAULT_TYPE, colle
         status["phase"] = 1
         status["last_update"] = current_time
         status["last_fresh_message_time"] = current_time
-        return  # No further updates in this phase
+        return
     
-    # ==========================================================================
     # PHASE 2: After 5 seconds - show count for the first time
-    # ==========================================================================
     if phase == 1 and (current_time - last_fresh_message_time) >= 1:
-        # Build status message with count
         text = f'נאספו עד עכשיו {count} קבצים לאוסף "{collection_name}"'
         
-        # Add buttons
         keyboard = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("📊 סטטוס", callback_data=f"batch_status:{count}"),
@@ -446,7 +439,6 @@ async def update_batch_status(message, context: ContextTypes.DEFAULT_TYPE, colle
             status["phase"] = 2
             status["last_update"] = current_time
         except Exception:
-            # If edit fails, send new message
             try:
                 status_msg = await message.reply_text(text, reply_markup=keyboard)
                 status["msg_id"] = status_msg.message_id
@@ -457,13 +449,10 @@ async def update_batch_status(message, context: ContextTypes.DEFAULT_TYPE, colle
                 pass
         return
     
-    # ==========================================================================
     # PHASE 3: Periodic updates - only if count changed
-    # ==========================================================================
     if phase == 2:
         time_since_last_update = current_time - last_update
         
-        # Check if we should send a fresh message (50-file rule with 25-second gate)
         should_send_fresh = (
             count % 30 == 0 and 
             count > 1 and 
@@ -471,7 +460,6 @@ async def update_batch_status(message, context: ContextTypes.DEFAULT_TYPE, colle
         )
         
         if should_send_fresh:
-            # Delete old message and send fresh one
             try:
                 await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
             except Exception:
@@ -493,7 +481,6 @@ async def update_batch_status(message, context: ContextTypes.DEFAULT_TYPE, colle
             except Exception:
                 pass
         
-        # Update every 5 seconds if count changed since last update
         elif time_since_last_update >= 5:
             text = f'נאספו עד עכשיו {count} קבצים לאוסף "{collection_name}"'
             keyboard = InlineKeyboardMarkup([
@@ -512,7 +499,6 @@ async def update_batch_status(message, context: ContextTypes.DEFAULT_TYPE, colle
                 )
                 status["last_update"] = current_time
             except Exception:
-                # If edit fails (e.g. message deleted), send new one
                 try:
                     status_msg = await message.reply_text(text, reply_markup=keyboard)
                     status["msg_id"] = status_msg.message_id
@@ -600,10 +586,6 @@ def build_page_menu(
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     track_and_reset_user(user, context)
-    # Open to all users now
-    # if not is_authorized(user.id):
-    #     ...
-
 
     chat = update.effective_chat
     if not chat:
@@ -677,7 +659,6 @@ async def new_collection_flow(message, user, context, args: list[str], edit_mess
 async def new_collection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     track_and_reset_user(user, context)
-    # Open to all users
 
     await new_collection_flow(update.message, user, context, context.args)
 
@@ -714,7 +695,6 @@ async def list_collections_flow(message, user, context, edit_message_id: int = N
 async def list_collections(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     track_and_reset_user(user, context)
-    # Open to all users
     
     await list_collections_flow(update.message, user, context)
 
@@ -752,7 +732,6 @@ async def manage_collections(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """ניהול אוספים - ייצוא ומחיקה"""
     user = update.effective_user
     track_and_reset_user(user, context)
-    # Open to all users
     
     await manage_collections_flow(update.message, user, context)
 
@@ -797,7 +776,6 @@ def build_page_file_type_menu(
     doc_count: int,
 ) -> InlineKeyboardMarkup:
     """תפריט סוגי קבצים עבור עמוד דפדוף מסוים"""
-    # total = video_count + image_count + doc_count
 
     keyboard = [
         [
@@ -890,7 +868,6 @@ async def browse(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """פקודת /browse - בחירת אוסף לדפדוף"""
     user = update.effective_user
     track_and_reset_user(user, context)
-    # Open to all users
 
     await show_browse_menu(
         chat_id=update.message.chat_id,
@@ -1216,12 +1193,8 @@ async def handle_batch_status_callback(update: Update, context: ContextTypes.DEF
     query = update.callback_query
     
     user = query.from_user
-    # Open to all users
-    # if not is_authorized(user.id):
-    #     await query.answer("אין לך גישה.", show_alert=True)
-    #     return
     
-    # חלץ את המספר מה-callback_data
+
     data = query.data  # format: batch_status:<count>
     try:
         _, count_str = data.split(":")
@@ -1406,7 +1379,6 @@ async def handle_main_menu_button(update: Update, context: ContextTypes.DEFAULT_
     action = query.data.split(":")[1]
     message_id = query.message.message_id
     
-    # Reset modes before entering new flow, just like /commands do
     reset_user_modes(context)
     
     if action == "newcollection":
@@ -1490,7 +1462,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user = update.effective_user
-    # Track user
     db.upsert_user(user.id, user.username, user.first_name, user.last_name)
     
     # Check if user is blocked
@@ -1778,7 +1749,7 @@ async def handle_back_to_main_callback(update: Update, context: ContextTypes.DEF
     await send_main_menu(query.message.chat_id, context)
 
 
-# --- Collection Management Handlers ---
+# Collection Management Handlers
 
 async def handle_manage_collection_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show management options for a specific collection"""
@@ -2104,7 +2075,7 @@ async def handle_back_to_manage_callback(update: Update, context: ContextTypes.D
     )
 
 
-# --- Shared Collection Access Handlers ---
+# Shared Collection Access Handlers
 
 async def access_shared(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Command to access a shared collection via code"""
@@ -2336,13 +2307,11 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_back_to_main_callback, pattern=r"^back_to_main$"))
     app.add_handler(CallbackQueryHandler(handle_main_menu_button, pattern=r"^main_menu:"))
     
-    # New handler for back to browse
     async def handle_back_to_browse(update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
         
         user = query.from_user
-        # Track user
         db.upsert_user(user.id, user.username, user.first_name, user.last_name)
         
         await show_browse_menu(
@@ -2354,17 +2323,17 @@ def main():
         
     app.add_handler(CallbackQueryHandler(handle_back_to_browse, pattern=r"^back_to_browse$"))
     
-    # ניהול אוספים
+
     app.add_handler(CallbackQueryHandler(handle_manage_collection_callback, pattern=r"^manage_collection:"))
     app.add_handler(CallbackQueryHandler(handle_export_collection_callback, pattern=r"^export_collection:"))
     app.add_handler(CallbackQueryHandler(handle_delete_collection_callback, pattern=r"^delete_collection:"))
     app.add_handler(CallbackQueryHandler(handle_back_to_manage_callback, pattern=r"^back_to_manage$"))
     
-    # מצב מחיקה
+
     app.add_handler(CallbackQueryHandler(handle_exit_delete_mode_callback, pattern=r"^exit_delete_mode$"))
     app.add_handler(CallbackQueryHandler(handle_delete_choose_collection_callback, pattern=r"^delete_choose_collection$"))
     
-    # שיתוף אוספים
+
     app.add_handler(CommandHandler("access", access_shared))
     app.add_handler(CallbackQueryHandler(handle_share_collection_callback, pattern=r"^share_collection:"))
     app.add_handler(CallbackQueryHandler(handle_share_stats_callback, pattern=r"^share_stats:"))
