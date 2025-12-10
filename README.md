@@ -24,8 +24,8 @@ git clone https://github.com/your_username/your_repo.git
 cd your_repo
 ```
 ### 2️⃣ Create virtual environment
-```bash
 Copy code
+```bash
 python -m venv venv
 ```
 ### 3️⃣ Activate it
