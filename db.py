@@ -233,6 +233,23 @@ def get_items_by_collection(collection_id: int, offset: int = 0, limit: int = 10
     return rows
 
 
+def get_item_by_id(item_id: int) -> tuple | None:
+    """Get a single item by its ID."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, content_type, file_id, text_content, file_name, file_size, added_at
+        FROM items
+        WHERE id = ?
+        """,
+        (item_id,)
+    )
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
 def count_items_in_collection(collection_id: int) -> int:
     conn = get_connection()
     cur = conn.cursor()

@@ -81,7 +81,8 @@ active_shared_collections: Dict[int, str] = {}  # user_id -> share_code
 def reset_user_modes(context: ContextTypes.DEFAULT_TYPE):
     """Reset all user modes when a new command is issued"""
     for key in ["delete_mode", "id_mode", "waiting_for_share_code", 
-                "verify_delete_collection", "verify_send_collection"]:
+                "verify_delete_collection", "verify_send_collection",
+                "import_mode"]:
         context.user_data.pop(key, None)
 
 
@@ -718,6 +719,10 @@ async def manage_collections_flow(message, user, context, edit_message_id: int =
         return
 
     keyboard = build_collection_keyboard(collections, "manage_collection", add_back_button=True)
+    
+    # Add Import Button
+    keyboard.insert(0, [InlineKeyboardButton("📥 יבוא אוסף מטקסט", callback_data="import_collection_mode")])
+    
     text = "בחר אוסף לניהול:"
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -730,6 +735,30 @@ async def manage_collections_flow(message, user, context, edit_message_id: int =
         )
     else:
         await message.reply_text(text, reply_markup=reply_markup)
+
+
+async def handle_import_collection_mode_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the import mode activation"""
+    query = update.callback_query
+    await query.answer()
+    
+    user = query.from_user
+    track_and_reset_user(user, context)
+    
+    context.user_data["import_mode"] = True
+    
+    text = (
+        "📥 **מצב יבוא אוסף הופעל**\n\n"
+        "אנא שלח כעת את קובץ ה-TXT שיוצא מהבוט.\n"
+        "הבוט יסרוק את הקובץ, יזהה את הפריטים וישחזר את האוסף מחדש.\n\n"
+        "שלח את הקובץ כעת..."
+    )
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⬅ חזור לתפריט ראשי", callback_data="back_to_main")]
+    ])
+    
+    await query.edit_message_text(text=text, reply_markup=keyboard, parse_mode="Markdown")
 
 
 async def manage_collections(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1460,6 +1489,126 @@ async def handle_send_collection_confirmation(update: Update, context: ContextTy
         return True
 
 
+
+async def process_imported_collection(message, context: ContextTypes.DEFAULT_TYPE):
+    """Process uploaded TXT file for collection import"""
+    doc = message.document
+    if not (doc.mime_type == "text/plain" or doc.file_name.lower().endswith(".txt")):
+        await message.reply_text("❌ אנא שלח קובץ טקסט (TXT) תקין.")
+        return
+
+    try:
+        # Download file
+        file = await doc.get_file()
+        content_bytes = await file.download_as_bytearray()
+        content = content_bytes.decode('utf-8')
+        
+        # Parse IDs
+        item_ids = []
+        for line in content.splitlines():
+            line = line.strip()
+            if line.startswith("ID:"):
+                try:
+                    parts = line.split(":")
+                    if len(parts) > 1:
+                        item_ids.append(int(parts[1].strip()))
+                except ValueError:
+                    pass
+        
+        if not item_ids:
+            await message.reply_text("❌ לא נמצאו פריטים לייבוא בקובץ זה.")
+            return
+            
+        # Determine new collection name
+        original_name = doc.file_name.replace("_export.txt", "").replace(".txt", "")
+        new_name = original_name
+        
+        # Remove "export" if present loosely (though the replacement above covers the standard format)
+        if new_name.endswith(" export"):
+             new_name = new_name[:-7]
+             
+        new_name = f"{new_name} (מיובא)"
+        user_id = message.from_user.id
+        
+        # Create collection
+        try:
+            new_collection_id = db.create_collection(new_name, user_id)
+        except Exception as e:
+            if "UNIQUE constraint failed" in str(e):
+                 # Try to append a number
+                 import random
+                 new_name = f"{new_name} {random.randint(100, 999)}"
+                 new_collection_id = db.create_collection(new_name, user_id)
+            else:
+                 raise e
+                 
+        # Copy items
+        import_count = 0
+        skipped_count = 0
+        
+        status_msg = await message.reply_text(f"📥 משחזר {len(item_ids)} פריטים לאוסף '{new_name}'...")
+        
+        for item_id in item_ids:
+            item = db.get_item_by_id(item_id)
+            if not item:
+                skipped_count += 1
+                continue
+                
+            # item structure: id, content_type, file_id, text_content, file_name, file_size, added_at
+            _, content_type, file_id, text_content, file_name, file_size, _ = item
+            
+            # Add copy to new collection
+            # We skip duplicate check here per plan to allow full restore, 
+            # OR we should perhaps check? The user asked to "reconstruct". 
+            # Since it's a new collection, there shouldn't be duplicates inside it yet unless the TXT has duplicates.
+            # We'll just add it.
+            
+            db.add_item(
+                collection_id=new_collection_id,
+                content_type=content_type,
+                file_id=file_id,
+                text_content=text_content,
+                file_name=file_name,
+                file_size=file_size
+            )
+            import_count += 1
+            
+            if import_count % 20 == 0:
+                 try:
+                     await context.bot.edit_message_text(
+                         chat_id=message.chat_id,
+                         message_id=status_msg.message_id,
+                         text=f"📥 משחזר... {import_count}/{len(item_ids)} פריטים"
+                     )
+                 except Exception:
+                     pass
+
+        # Cleanup
+        context.user_data.pop("import_mode", None)
+        
+        # Final message
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅ חזור לתפריט ראשי", callback_data="back_to_main")]
+        ])
+        
+        await context.bot.edit_message_text(
+            chat_id=message.chat_id,
+            message_id=status_msg.message_id,
+            text=(
+                f"✅ **היבוא הושלם בהצלחה!**\n\n"
+                f"📁 אוסף חדש: {new_name}\n"
+                f"📥 פריטים שיובאו: {import_count}\n"
+                f"⏭️ פריטים שדולגו (לא נמצאו): {skipped_count}"
+            ),
+            reply_markup=keyboard,
+            parse_mode="Markdown"
+        )
+        
+    except Exception as e:
+        logger.error(f"Import error: {e}", exc_info=True)
+        await message.reply_text("❌ שגיאה במהלך היבוא. ודא שהקובץ תקין ונסה שוב.")
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message:
@@ -1484,6 +1633,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # בדיקה אם יש אישור שליחת אוסף ממתין
     if await handle_send_collection_confirmation(update, context):
         return
+
+    # בדיקה עבור מצב יבוא
+    if context.user_data.get("import_mode"):
+        await process_imported_collection(message, context)
+        return
+
 
 
     if context.user_data.get("delete_mode"):
@@ -1780,11 +1935,10 @@ async def handle_back_to_main_callback(update: Update, context: ContextTypes.DEF
 
     user = query.from_user
     context.user_data["id_mode"] = False
+    context.user_data.pop("import_mode", None) # Ensure import mode is cleared
 
-    try:
-        await query.edit_message_reply_markup(reply_markup=None)
-    except Exception:
-        pass
+    # Set the current message as the main menu message so it gets edited
+    context.user_data["main_menu_msg_id"] = query.message.message_id
 
     await send_main_menu(query.message.chat_id, context)
 
@@ -2071,6 +2225,9 @@ async def handle_delete_collection_callback(update: Update, context: ContextType
         return
     
     collection_name = collection[1]
+    # Escape markdown characters in collection name
+    safe_collection_name = collection_name.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[")
+    
     item_count = db.count_items_in_collection(collection_id)
     
     # Use unified verification code mechanism
@@ -2079,7 +2236,7 @@ async def handle_delete_collection_callback(update: Update, context: ContextType
     
     message_text = (
         f"⚠️ אזהרה: מחיקת אוסף\n\n"
-        f"אוסף: {collection_name}\n"
+        f"אוסף: {safe_collection_name}\n"
         f"פריטים: {item_count}\n\n"
         f"🔢 קוד אימות: `{verification_code}`\n\n"
         f"שלח את הקוד הזה כדי לאשר את המחיקה."
@@ -2387,6 +2544,7 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_exit_shared_collection_callback, pattern=r"^exit_shared_collection$"))
     app.add_handler(CallbackQueryHandler(handle_cancel_share_access_callback, pattern=r"^cancel_share_access$"))
 
+    app.add_handler(CallbackQueryHandler(handle_import_collection_mode_callback, pattern=r"^import_collection_mode"))
     app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), handle_message))
 
     app.add_error_handler(error_handler)
