@@ -620,20 +620,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def new_collection_flow(message, user, context, args: list[str], edit_message_id: int = None):
     if not args:
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⬅ חזור לתפריט ראשי", callback_data="back_to_main")]
-        ])
-        text = "כתוב שם לאוסף. לדוגמה:\n/newcollection טיול בולגריה"
+        context.user_data["creating_collection_mode"] = True
         
         if edit_message_id:
             await context.bot.edit_message_text(
                 chat_id=message.chat_id,
                 message_id=edit_message_id,
-                text=text,
-                reply_markup=keyboard
+                text="מתחיל ביצירת אוסף חדש 🗂\nאיך לקרוא לאוסף?",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⬅ חזור לתפריט ראשי", callback_data="back_to_main")]
+                ])
             )
         else:
-            await message.reply_text(text, reply_markup=keyboard)
+            await message.reply_text(
+                "מתחיל ביצירת אוסף חדש 🗂\nאיך לקרוא לאוסף?",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⬅ חזור לתפריט ראשי", callback_data="back_to_main")]
+                ])
+            )
         return
 
     name = " ".join(args)
@@ -659,6 +663,87 @@ async def new_collection_flow(message, user, context, args: list[str], edit_mess
             await message.reply_text(f"❌ כבר יש לך אוסף בשם '{name}'.\nבחר שם אחר.")
         else:
             await message.reply_text(f"שגיאה ביצירת אוסף: {e}")
+
+
+
+async def handle_new_collection_name_input(message, context: ContextTypes.DEFAULT_TYPE):
+    """Handle text input for new collection name"""
+    name = message.text.strip()
+    if not name or name.startswith("/"):
+        await message.reply_text("אנא שלח שם תקין לאוסף (טקסט בלבד).")
+        return
+
+    context.user_data["temp_collection_name"] = name
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ אישור", callback_data="confirm_create_collection")],
+        [InlineKeyboardButton("✏ בחירת שם אחר", callback_data="retry_create_collection")],
+        [InlineKeyboardButton("❌ ביטול", callback_data="back_to_main")]
+    ])
+    
+    await message.reply_text(
+        f"קיבלתי, '{name}'. ממתין לאישורך.",
+        reply_markup=keyboard
+    )
+
+async def handle_confirm_create_collection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Confirm creation of new collection"""
+    query = update.callback_query
+    await query.answer()
+    
+    name = context.user_data.get("temp_collection_name")
+    if not name:
+        await query.edit_message_text("❌ אירעה שגיאה. אנא נסה שוב.")
+        context.user_data.pop("creating_collection_mode", None)
+        return
+
+    user = query.from_user
+    
+    try:
+        collection_id = db.create_collection(name, user.id)
+        active_collections[user.id] = collection_id
+        
+        # Cleanup state
+        context.user_data.pop("creating_collection_mode", None)
+        context.user_data.pop("temp_collection_name", None)
+        
+        # Auto-activate collection mode
+        keyboard = InlineKeyboardMarkup(
+            [[InlineKeyboardButton(text="🛑 הפסק הוספה", callback_data="stop_collect")]]
+        )
+        
+        await query.edit_message_text(
+            f"✅ אוסף חדש נוצר: {name}\n\n"
+            f"🔄 מתחיל מצב איסוף...\n"
+            f"העלה עכשיו קבצים (תמונות, סרטונים, מסמכים) והם יתווספו לאוסף.",
+            reply_markup=keyboard
+        )
+        # Update main menu message if possible (optional, but good practice)
+        
+    except Exception as e:
+        logger.exception("Error creating collection")
+        if "UNIQUE constraint failed" in str(e):
+            await query.edit_message_text(
+                f"❌ כבר יש לך אוסף בשם '{name}'.\nבחר שם אחר או לחץ על ביטול.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✏ בחירת שם אחר", callback_data="retry_create_collection")],
+                    [InlineKeyboardButton("❌ ביטול", callback_data="back_to_main")]
+                ])
+            )
+        else:
+            await query.edit_message_text(f"שגיאה ביצירת אוסף: {e}")
+
+async def handle_retry_create_collection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Retry entering collection name"""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        "מתחיל ביצירת אוסף חדש 🗂\nאיך לקרוא לאוסף?",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅ חזור לתפריט ראשי", callback_data="back_to_main")]
+        ])
+    )
 
 
 async def new_collection(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1653,6 +1738,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await handle_send_collection_confirmation(update, context):
         return
 
+    # בדיקה עבור יצירת אוסף חדש (הזנת שם)
+    if context.user_data.get("creating_collection_mode"):
+        await handle_new_collection_name_input(message, context)
+        return
+
     # בדיקה עבור מצב יבוא
     if context.user_data.get("import_mode"):
         await process_imported_collection(message, context)
@@ -2539,6 +2629,9 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_revoke_share_callback, pattern=r"^revoke_share:"))
     app.add_handler(CallbackQueryHandler(handle_exit_shared_collection_callback, pattern=r"^exit_shared_collection$"))
     app.add_handler(CallbackQueryHandler(handle_cancel_share_access_callback, pattern=r"^cancel_share_access$"))
+
+    app.add_handler(CallbackQueryHandler(handle_confirm_create_collection, pattern=r"^confirm_create_collection$"))
+    app.add_handler(CallbackQueryHandler(handle_retry_create_collection, pattern=r"^retry_create_collection$"))
 
     app.add_handler(CallbackQueryHandler(handle_import_collection_mode_callback, pattern=r"^import_collection_mode"))
     app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), handle_message))
