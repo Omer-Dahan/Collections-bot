@@ -721,7 +721,7 @@ async def manage_collections_flow(message, user, context, edit_message_id: int =
     keyboard = build_collection_keyboard(collections, "manage_collection", add_back_button=True)
     
     # Add Import Button
-    keyboard.insert(0, [InlineKeyboardButton("📥 יבוא אוסף מטקסט", callback_data="import_collection_mode")])
+    keyboard.insert(0, [InlineKeyboardButton("📥 יבוא אוסף מקובץ", callback_data="import_collection_mode")])
     
     text = "בחר אוסף לניהול:"
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1314,65 +1314,90 @@ async def handle_stop_collect_callback(update: Update, context: ContextTypes.DEF
 
 
 async def remove_flow(message, user, context, args: list[str], edit_message_id: int = None):
-    if args:
-        arg = args[0]
-        try:
-            item_id = int(arg)
-        except ValueError:
-            await message.reply_text("ה id ששלחת לא מספר תקין.")
-            return
-
-        deleted = db.delete_item_by_id(item_id, user.id)
-        if deleted > 0:
-            await message.reply_text(f"נמחק פריט אחד עם id {item_id}.")
-        else:
-            await message.reply_text("לא נמצא פריט עם id הזה.")
-        return
-
     # Check if user has any collections/items
     collections = db.get_collections(user.id)
     if not collections:
-        await message.reply_text("אין לך עדיין אוספים למחיקה. צור אוסף חדש כדי להתחיל.")
+        text = "אין לך עדיין אוספים למחיקה. צור אוסף חדש כדי להתחיל."
+        if edit_message_id:
+             await context.bot.edit_message_text(chat_id=message.chat_id, message_id=edit_message_id, text=text)
+        else:
+             await message.reply_text(text)
         return
         
-    # Check if user has any items at all (optional, but good UX)
+    # Check if user has any items at all
     total_items = 0
     for col_id, _ in collections:
         total_items += db.count_items_in_collection(col_id)
     
     if total_items == 0:
-        await message.reply_text("האוספים שלך ריקים. אין מה למחוק.")
+        text = "האוספים שלך ריקים. אין מה למחוק."
+        if edit_message_id:
+             await context.bot.edit_message_text(chat_id=message.chat_id, message_id=edit_message_id, text=text)
+        else:
+             await message.reply_text(text)
         return
 
-    context.user_data["delete_mode"] = True
-    
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📂 בחר אוסף לדפדוף ומחיקה", callback_data="delete_choose_collection")],
-        [InlineKeyboardButton("🚪 צא ממצב מחיקה", callback_data="exit_delete_mode")]
-    ])
-    
-    text = (
-        "מצב מחיקה פעיל.\n"
-        "שלח עכשיו וידאו, תמונה, מסמך שברצונך למחוק מהמאגר\n"
-        "או שלח הודעת טקסט שמכילה רק מספר id פנימי למחיקה לפי id."
-    )
+    # Build collection list for selection
+    keyboard = build_collection_keyboard(collections, "delete_select_collection", add_back_button=True)
+    text = "🗑 **מצב מחיקה**\n\nבחר אוסף שממנו תרצה למחוק פריטים:"
     
     if edit_message_id:
         await context.bot.edit_message_text(
             chat_id=message.chat_id,
             message_id=edit_message_id,
             text=text,
-            reply_markup=keyboard
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
         )
     else:
-        await message.reply_text(text, reply_markup=keyboard)
+        await message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 
 async def remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    reset_user_modes(context)
+    track_and_reset_user(user, context)
     
     await remove_flow(update.message, user, context, context.args)
+
+
+async def handle_delete_select_collection_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle collection selection for delete mode"""
+    query = update.callback_query
+    await query.answer()
+    
+    user = query.from_user
+    data = query.data  # format: delete_select_collection:<id>
+    
+    try:
+        _, col_id_str = data.split(":")
+        collection_id = int(col_id_str)
+    except ValueError:
+        return
+
+    is_allowed, error_msg, collection = check_collection_access(user.id, collection_id)
+    if not is_allowed:
+        await query.edit_message_text(error_msg)
+        return
+        
+    # Activate delete mode for this collection
+    context.user_data["delete_mode"] = True
+    context.user_data["delete_collection_id"] = collection_id
+    
+    collection_name = collection[1]
+    
+    text = (
+        f"🗑 **מצב מחיקה פעיל**\n"
+        f"אוסף נבחר: {collection_name}\n\n"
+        f"שלח עכשיו את הפריטים שברצונך למחוק (תמונות, סרטונים, קבצים).\n"
+        f"כל קובץ שתישלח יימחק מהאוסף הזה.\n"
+        f"לחץ על 'סיום' כדי לחזור לתפריט."
+    )
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚪 סיום וחזרה לתפריט", callback_data="exit_delete_mode")]
+    ])
+    
+    await query.edit_message_text(text=text, reply_markup=keyboard, parse_mode="Markdown")
 
 
 async def id_file_flow(message, user, context, edit_message_id: int = None):
@@ -1791,34 +1816,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_delete_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     
-    # מצב המחיקה נשאר פעיל - רק כפתור היציאה מסגר אותו
-    
-    delete_mode_keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🚪 צא ממצב מחיקה", callback_data="exit_delete_mode")],
-        [InlineKeyboardButton("📂 בחר אוסף אחר למחיקה", callback_data="delete_choose_collection")]
-    ])
-
-    if message.text and not message.text.startswith("/"):
-        text = message.text.strip()
-        if text.isdigit():
-            item_id = int(text)
-            deleted = db.delete_item_by_id(item_id, update.effective_user.id)
-            if deleted > 0:
-                await message.reply_text(
-                    f"✅ נמחק פריט אחד עם id {item_id}.",
-                    reply_markup=delete_mode_keyboard
-                )
-            else:
-                await message.reply_text(
-                    "לא נמצא פריט עם id הזה.",
-                    reply_markup=delete_mode_keyboard
-                )
-        else:
-            await message.reply_text(
-                "הטקסט לא מספר תקין ולכן לא בוצעה מחיקה.",
-                reply_markup=delete_mode_keyboard
-            )
+    collection_id = context.user_data.get("delete_collection_id")
+    if not collection_id:
+        # Should not happen if flow is correct, but safe fallback
+        await message.reply_text("שגיאה: לא נבחר אוסף למחיקה. אנא התחל את התהליך מחדש.")
+        context.user_data.pop("delete_mode", None)
         return
+
+    # Button to go back to main menu
+    main_menu_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⬅ חזור לתפריט ראשי", callback_data="back_to_main")]
+    ])
 
     file_id = None
     if message.video:
@@ -1828,25 +1836,42 @@ async def handle_delete_message(update: Update, context: ContextTypes.DEFAULT_TY
         file_id = photo_size.file_id
     elif message.document:
         file_id = message.document.file_id
+    elif message.audio:
+        file_id = message.audio.file_id
 
     if not file_id:
         await message.reply_text(
-            "לא זיהיתי קובץ למחיקה.",
-            reply_markup=delete_mode_keyboard
+            "❌ אנא שלח קובץ (תמונה, וידאו, מסמך) כדי למחוק אותו מהאוסף.",
+            reply_markup=main_menu_keyboard
         )
         return
 
-    deleted = db.delete_items_by_file_id(file_id, update.effective_user.id)
+    # Add delay as requested
+    await asyncio.sleep(1)
+
+    # Delete specific file from specific collection
+    deleted = db.delete_items_by_file_id(file_id, update.effective_user.id, collection_id)
+    
+    # Clean up previous confirmation message if exists
+    prev_msg_id = context.user_data.get("last_delete_confirm_msg_id")
+    if prev_msg_id:
+        try:
+            await context.bot.delete_message(chat_id=message.chat_id, message_id=prev_msg_id)
+        except Exception:
+            pass  # Message might be too old or already deleted
+
     if deleted > 0:
-        await message.reply_text(
-            f"✅ נמחקו {deleted} פריטים עם אותו קובץ.",
-            reply_markup=delete_mode_keyboard
+        msg = await message.reply_text(
+            f"✅ הפריט נמחק בהצלחה מהאוסף.",
+            reply_markup=main_menu_keyboard
         )
+        context.user_data["last_delete_confirm_msg_id"] = msg.message_id
     else:
-        await message.reply_text(
-            "לא נמצא קובץ תואם במאגר.",
-            reply_markup=delete_mode_keyboard
+        msg = await message.reply_text(
+            "❌ הקובץ הזה לא נמצא באוסף שנבחר.",
+            reply_markup=main_menu_keyboard
         )
+        context.user_data["last_delete_confirm_msg_id"] = msg.message_id
 
 
 async def handle_id_file_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2436,6 +2461,7 @@ async def handle_exit_delete_mode_callback(update: Update, context: ContextTypes
     await query.answer()
     
     context.user_data.pop("delete_mode", None)
+    context.user_data.pop("delete_collection_id", None)
     
     # Show main menu directly instead of separate message
     await query.edit_message_text(
@@ -2445,29 +2471,7 @@ async def handle_exit_delete_mode_callback(update: Update, context: ContextTypes
     context.user_data["main_menu_msg_id"] = query.message.message_id
 
 
-async def handle_delete_choose_collection_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show collections list to choose for deletion"""
-    query = update.callback_query
-    await query.answer()
-    
-    user = query.from_user
-    collections = db.get_collections(user.id)
-    
-    if not collections:
-        await query.edit_message_text("אין לך אוספים.")
-        return
-    
-    keyboard = [
-        [InlineKeyboardButton(text=f"📁 {name}", callback_data=f"browse_page:{col_id}:1")]
-        for col_id, name in collections
-    ]
-    keyboard.append([InlineKeyboardButton("🚪 צא ממצב מחיקה", callback_data="exit_delete_mode")])
-    
-    await query.edit_message_text(
-        "📂 בחר אוסף לדפדוף ומחיקה:\n\n"
-        "(מצב המחיקה עדיין פעיל - שלח קובץ למחיקה)",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+
 
 def main():
 
@@ -2525,7 +2529,7 @@ def main():
     
 
     app.add_handler(CallbackQueryHandler(handle_exit_delete_mode_callback, pattern=r"^exit_delete_mode$"))
-    app.add_handler(CallbackQueryHandler(handle_delete_choose_collection_callback, pattern=r"^delete_choose_collection$"))
+    app.add_handler(CallbackQueryHandler(handle_delete_select_collection_callback, pattern=r"^delete_select_collection:"))
     
 
     app.add_handler(CommandHandler("access", access_shared))

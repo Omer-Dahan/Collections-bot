@@ -277,15 +277,26 @@ def delete_item_by_id(item_id: int, user_id: int) -> int:
     return deleted
 
 
-def delete_items_by_file_id(file_id: str, user_id: int) -> int:
+def delete_items_by_file_id(file_id: str, user_id: int, collection_id: int = None) -> int:
     conn = get_connection()
     cur = conn.cursor()
-    # Only delete if item belongs to a collection owned by user
-    cur.execute("""
-        DELETE FROM items 
-        WHERE file_id = ? 
-        AND collection_id IN (SELECT id FROM collections WHERE user_id = ?)
-    """, (file_id, user_id))
+    
+    if collection_id:
+        # Delete from specific collection (owned by user)
+        cur.execute("""
+            DELETE FROM items 
+            WHERE file_id = ? 
+            AND collection_id = ?
+            AND collection_id IN (SELECT id FROM collections WHERE user_id = ?)
+        """, (file_id, collection_id, user_id))
+    else:
+        # Delete from any collection owned by user (legacy behavior)
+        cur.execute("""
+            DELETE FROM items 
+            WHERE file_id = ? 
+            AND collection_id IN (SELECT id FROM collections WHERE user_id = ?)
+        """, (file_id, user_id))
+        
     deleted = cur.rowcount
     conn.commit()
     conn.close()
