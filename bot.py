@@ -371,8 +371,55 @@ def format_size(size: int | None) -> str:
     return f"{s:.1f} {units[idx]}"
 
 
+async def batch_status_loop(chat_id: int, collection_id: int, collection_name: str, context: ContextTypes.DEFAULT_TYPE, user_data_status: dict):
+    """Background loop to update status message every few seconds"""
+    try:
+        while True:
+            current_count = user_data_status["count"]
+            last_sent_count = user_data_status.get("last_sent_count", 0)
+            
+            # If count changed or message doesn't exist, send update
+            if current_count != last_sent_count or not user_data_status.get("msg_id"):
+                
+                # Delete old message if exists
+                old_msg_id = user_data_status.get("msg_id")
+                if old_msg_id:
+                    try:
+                        await context.bot.delete_message(chat_id=chat_id, message_id=old_msg_id)
+                    except Exception:
+                        pass
+                
+                # Send new message
+                text = f"✅ נוספו קבצים לאוסף \"{collection_name}\""
+                keyboard = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("📊 מצב איסוף", callback_data=f"batch_status:{collection_id}"),
+                        InlineKeyboardButton("🏠 חזרה לבית", callback_data="back_to_main") # Changed to main menu/home as requested
+                    ]
+                ])
+                
+                try:
+                    msg = await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=keyboard)
+                    user_data_status["msg_id"] = msg.message_id
+                    user_data_status["last_sent_count"] = current_count
+                except Exception as e:
+                    logger.error(f"Error sending batch status: {e}")
+            
+            # Wait 2 seconds
+            await asyncio.sleep(2)
+            
+            if user_data_status["count"] == user_data_status["last_sent_count"]:
+                # No new files in last 2 seconds, stop loop
+                user_data_status["is_updating"] = False
+                break
+                
+    except Exception as e:
+        logger.error(f"Error in batch_status_loop: {e}")
+        user_data_status["is_updating"] = False
+
+
 async def update_batch_status(message, context: ContextTypes.DEFAULT_TYPE, collection_name: str):
-    """עדכון הודעת סטטוס איסוף קבצים - מערכת phase-based"""
+    """עדכון הודעת סטטוס איסוף קבצים - מערכת throttled"""
     user_id = message.from_user.id
     
     # Get active collection for this user
@@ -391,122 +438,26 @@ async def update_batch_status(message, context: ContextTypes.DEFAULT_TYPE, colle
         user_data["batch_status"][collection_id] = {
             "count": 0,
             "msg_id": None,
-            "last_update": 0.0,
-            "last_fresh_message_time": 0.0,
-            "phase": 0
+            "last_sent_count": 0,
+            "is_updating": False
         }
     
-    # Get collection-specific status
+    # Update count
     status = user_data["batch_status"][collection_id]
     status["count"] += 1
-    count = status["count"]
-    msg_id = status["msg_id"]
-    last_update = status["last_update"]
-    phase = status.get("phase", 0)
-    last_fresh_message_time = status.get("last_fresh_message_time", 0.0)
     
-    chat_id = message.chat_id
-    current_time = datetime.now().timestamp()
-    
-    # PHASE 1: First file - send initial message without count
-    if phase == 0:
-        initial_text = f'תהליך קליטת הקבצים החל לאוסף "{collection_name}"...'
-        
-        status_msg = await message.reply_text(initial_text)
-        status["msg_id"] = status_msg.message_id
-        status["phase"] = 1
-        status["last_update"] = current_time
-        status["last_fresh_message_time"] = current_time
-        return
-    
-    # PHASE 2: After 5 seconds - show count for the first time
-    if phase == 1 and (current_time - last_fresh_message_time) >= 1:
-        text = f'נאספו עד עכשיו {count} קבצים לאוסף "{collection_name}"'
-        
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("📊 סטטוס", callback_data=f"batch_status:{count}"),
-                InlineKeyboardButton("🛑 הפסק הוספה", callback_data="stop_collect")
-            ]
-        ])
-        
-        try:
-            await context.bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=msg_id,
-                text=text,
-                reply_markup=keyboard,
+    # Start loop if not running
+    if not status["is_updating"]:
+        status["is_updating"] = True
+        context.application.create_task(
+            batch_status_loop(
+                chat_id=message.chat_id,
+                collection_id=collection_id,
+                collection_name=collection_name,
+                context=context,
+                user_data_status=status
             )
-            status["phase"] = 2
-            status["last_update"] = current_time
-        except Exception:
-            try:
-                status_msg = await message.reply_text(text, reply_markup=keyboard)
-                status["msg_id"] = status_msg.message_id
-                status["phase"] = 2
-                status["last_update"] = current_time
-                status["last_fresh_message_time"] = current_time
-            except Exception:
-                pass
-        return
-    
-    # PHASE 3: Periodic updates - only if count changed
-    if phase == 2:
-        time_since_last_update = current_time - last_update
-        
-        should_send_fresh = (
-            count % 30 == 0 and 
-            count > 1 and 
-            (current_time - last_fresh_message_time) >= 15
         )
-        
-        if should_send_fresh:
-            try:
-                await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-            except Exception:
-                pass
-            
-            text = f'נאספו עד עכשיו {count} קבצים לאוסף "{collection_name}"'
-            keyboard = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("📊 סטטוס", callback_data=f"batch_status:{count}"),
-                    InlineKeyboardButton("🛑 הפסק הוספה", callback_data="stop_collect")
-                ]
-            ])
-            
-            try:
-                status_msg = await message.reply_text(text, reply_markup=keyboard)
-                status["msg_id"] = status_msg.message_id
-                status["last_update"] = current_time
-                status["last_fresh_message_time"] = current_time
-            except Exception:
-                pass
-        
-        elif time_since_last_update >= 5:
-            text = f'נאספו עד עכשיו {count} קבצים לאוסף "{collection_name}"'
-            keyboard = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("📊 סטטוס", callback_data=f"batch_status:{count}"),
-                    InlineKeyboardButton("🛑 הפסק הוספה", callback_data="stop_collect")
-                ]
-            ])
-            
-            try:
-                await context.bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=msg_id,
-                    text=text,
-                    reply_markup=keyboard,
-                )
-                status["last_update"] = current_time
-            except Exception:
-                try:
-                    status_msg = await message.reply_text(text, reply_markup=keyboard)
-                    status["msg_id"] = status_msg.message_id
-                    status["last_update"] = current_time
-                    status["last_fresh_message_time"] = current_time
-                except Exception:
-                    pass
 
 
 async def delete_message_after_delay(bot, chat_id: int, message_id: int, delay: int):
@@ -1310,17 +1261,25 @@ async def handle_batch_status_callback(update: Update, context: ContextTypes.DEF
     """הצגת התראה קופצת עם מספר הקבצים שנוספו"""
     query = update.callback_query
     
-    user = query.from_user
-    
-
-    data = query.data  # format: batch_status:<count>
+    data = query.data  # format: batch_status:<collection_id>
     try:
-        _, count_str = data.split(":")
-        count = int(count_str)
-        await query.answer(f"✅ נוספו {count} קבצים לאוסף!", show_alert=True)
+        _, col_id_str = data.split(":")
+        collection_id = int(col_id_str)
+        
+        # Get live count from memory if available
+        user_data = context.user_data
+        count = 0
+        if "batch_status" in user_data and collection_id in user_data["batch_status"]:
+            count = user_data["batch_status"][collection_id]["count"]
+        
+        if count == 0:
+         count = db.count_items_in_collection(collection_id)
+
+        await query.answer(f"📦 נאספו {count} קבצים לאוסף", show_alert=False)
+        
     except Exception as e:
         logger.error(f"Error in batch status: {e}")
-        await query.answer("שגיאה בקבלת סטטוס", show_alert=True)
+        await query.answer("שגיאה בקבלת סטטוס", show_alert=False)
 
 
 async def handle_collection_send_all_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2043,14 +2002,27 @@ async def handle_back_to_main_callback(update: Update, context: ContextTypes.DEF
     await query.answer()
 
     user = query.from_user
+    
+    # Reset modes
+    reset_user_modes(context) # Helper we already have
+    # Also explicitly clear id_mode just in case
     context.user_data["id_mode"] = False
+    
+    # If we are coming from a batch status message, we should probably stop the loop if it's running
+    # but the loop auto-stops if no new files come in.
+    # We don't want to kill the "batch_status" data because the user might send more files.
+    # But visually we are going home.
 
-    try:
-        await query.edit_message_reply_markup(reply_markup=None)
-    except Exception:
-        pass
-
-    await send_main_menu(query.message.chat_id, context)
+    text = get_main_menu_text()
+    keyboard = build_main_menu_keyboard()
+    
+    await query.edit_message_text(
+        text=text,
+        reply_markup=keyboard
+    )
+    
+    # Update the reference to the main menu message
+    context.user_data["main_menu_msg_id"] = query.message.message_id
 
 
 # Collection Management Handlers
