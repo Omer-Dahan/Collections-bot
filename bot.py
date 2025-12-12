@@ -1557,12 +1557,6 @@ async def process_imported_collection(message, context: ContextTypes.DEFAULT_TYP
             # item structure: id, content_type, file_id, text_content, file_name, file_size, added_at
             _, content_type, file_id, text_content, file_name, file_size, _ = item
             
-            # Add copy to new collection
-            # We skip duplicate check here per plan to allow full restore, 
-            # OR we should perhaps check? The user asked to "reconstruct". 
-            # Since it's a new collection, there shouldn't be duplicates inside it yet unless the TXT has duplicates.
-            # We'll just add it.
-            
             db.add_item(
                 collection_id=new_collection_id,
                 content_type=content_type,
@@ -1935,10 +1929,11 @@ async def handle_back_to_main_callback(update: Update, context: ContextTypes.DEF
 
     user = query.from_user
     context.user_data["id_mode"] = False
-    context.user_data.pop("import_mode", None) # Ensure import mode is cleared
 
-    # Set the current message as the main menu message so it gets edited
-    context.user_data["main_menu_msg_id"] = query.message.message_id
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
 
     await send_main_menu(query.message.chat_id, context)
 
@@ -2225,9 +2220,6 @@ async def handle_delete_collection_callback(update: Update, context: ContextType
         return
     
     collection_name = collection[1]
-    # Escape markdown characters in collection name
-    safe_collection_name = collection_name.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[")
-    
     item_count = db.count_items_in_collection(collection_id)
     
     # Use unified verification code mechanism
@@ -2236,7 +2228,7 @@ async def handle_delete_collection_callback(update: Update, context: ContextType
     
     message_text = (
         f"⚠️ אזהרה: מחיקת אוסף\n\n"
-        f"אוסף: {safe_collection_name}\n"
+        f"אוסף: {collection_name}\n"
         f"פריטים: {item_count}\n\n"
         f"🔢 קוד אימות: `{verification_code}`\n\n"
         f"שלח את הקוד הזה כדי לאשר את המחיקה."
