@@ -823,9 +823,12 @@ async def handle_select_collection_callback(update: Update, context: ContextType
         return
 
 
+
     active_collections[user.id] = collection_id
 
-    # Keep batch_status for all collections - don't reset when switching
+    # Reset batch status for this collection to ensure fresh counter
+    if "batch_status" in context.user_data and collection_id in context.user_data["batch_status"]:
+        del context.user_data["batch_status"][collection_id]
 
     keyboard = InlineKeyboardMarkup(
         [[InlineKeyboardButton(text="🛑 הפסק הוספה", callback_data="stop_collect")]]
@@ -1347,6 +1350,11 @@ async def handle_stop_collect_callback(update: Update, context: ContextTypes.DEF
     context.user_data.pop("batch_msg_id", None)
 
     if user.id in active_collections:
+        collection_id = active_collections[user.id]
+        # Clean up batch status for this collection
+        if "batch_status" in context.user_data and collection_id in context.user_data["batch_status"]:
+             del context.user_data["batch_status"][collection_id]
+        
         del active_collections[user.id]
 
     # Show main menu directly instead of separate message
