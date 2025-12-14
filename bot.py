@@ -314,7 +314,7 @@ async def safe_send_media_group(bot, chat_id, media, reply_to_message_id=None):
 def build_main_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📁 יצירת אוסף חדש", callback_data="main_menu:newcollection")],
-        [InlineKeyboardButton("⭐ בחירת אוסף פעיל", callback_data="main_menu:collections")],
+
         [InlineKeyboardButton("📚 דפדוף וצפייה בתוכן", callback_data="main_menu:browse")],
         [InlineKeyboardButton("➕ הוסף תוכן לאוסף", callback_data="main_menu:collections")],
         [InlineKeyboardButton("🛠 ניהול אוספים", callback_data="main_menu:manage")],
