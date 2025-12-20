@@ -880,6 +880,12 @@ def build_page_file_type_menu(
                 callback_data=f"collection_send_all:{collection_id}",
             ),
         ],
+        [
+            InlineKeyboardButton(
+                text="⬅️ חזור",
+                callback_data=f"browse_page:{collection_id}:{page}",
+            ),
+        ],
     ]
 
     return InlineKeyboardMarkup(keyboard)
@@ -989,22 +995,157 @@ async def handle_browse_page_callback(update: Update, context: ContextTypes.DEFA
     )
     
     # Add Back button with context awareness
-    back_text = "⬅️ חזור לרשימת האוספים"
+    back_text = "⬅ חזור"
     back_data = "back_to_browse"
     
     # Check if admin is viewing someone else's collection
     if is_admin(user.id) and collection[2] != user.id:
-        back_text = "⬅️ חזור לניהול האוסף"
         back_data = f"admin_manage_col:{collection_id}"
     
     keyboard_list = list(reply_markup.inline_keyboard)
-    keyboard_list.append([InlineKeyboardButton(back_text, callback_data=back_data)])
+    # Add scroll view button and back button on the same row
+    keyboard_list.append([
+        InlineKeyboardButton("🔄 צפייה בגלילה", callback_data=f"scroll_view:{collection_id}:0"),
+        InlineKeyboardButton(back_text, callback_data=back_data)
+    ])
     reply_markup = InlineKeyboardMarkup(keyboard_list)
 
-    await query.edit_message_text(
-        text=header_text,
-        reply_markup=reply_markup,
-    )
+    # Try to edit the message, if it fails (e.g., coming from media message), delete and send new
+    chat_id = query.message.chat_id
+    try:
+        await query.edit_message_text(
+            text=header_text,
+            reply_markup=reply_markup,
+        )
+    except Exception:
+        # If edit fails (e.g., message has media), delete and send new
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=query.message.message_id)
+        except Exception:
+            pass
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=header_text,
+            reply_markup=reply_markup,
+        )
+
+
+async def handle_scroll_view_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """צפייה בפריט יחיד עם כפתורי הבא/הקודם - מחיקת הודעה ושליחה חדשה"""
+    query = update.callback_query
+    await query.answer()
+
+    user = query.from_user
+    data = query.data  # format: scroll_view:<collection_id>:<item_index>
+    
+    if not data.startswith("scroll_view:"):
+        return
+
+    try:
+        _, col_id_str, index_str = data.split(":")
+        collection_id = int(col_id_str)
+        item_index = int(index_str)
+    except ValueError:
+        return
+
+    is_allowed, error_msg, collection = check_collection_access(user.id, collection_id)
+    if not is_allowed:
+        await query.edit_message_text(error_msg)
+        return
+
+    # Get total items count
+    total_items = db.count_items_in_collection(collection_id)
+    
+    if total_items == 0:
+        await query.edit_message_text("אין פריטים באוסף הזה.")
+        return
+
+    # Ensure index is within bounds
+    if item_index < 0:
+        item_index = 0
+    elif item_index >= total_items:
+        item_index = total_items - 1
+
+    # Get single item at the current index
+    items = db.get_items_by_collection(collection_id, offset=item_index, limit=1)
+    if not items:
+        await query.edit_message_text("פריט לא נמצא.")
+        return
+
+    item = items[0]
+    # item structure: (id, content_type, file_id, text_content, file_name, file_size, added_at)
+    item_id, content_type, file_id, text_content, file_name, file_size, added_at = item
+
+    chat_id = query.message.chat_id
+    
+    # Build navigation keyboard
+    nav_buttons = []
+    if item_index > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅ הקודם", callback_data=f"scroll_view:{collection_id}:{item_index - 1}"))
+    if item_index < total_items - 1:
+        nav_buttons.append(InlineKeyboardButton("הבא ➡", callback_data=f"scroll_view:{collection_id}:{item_index + 1}"))
+    
+    keyboard = []
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+    keyboard.append([InlineKeyboardButton("🔙 חזור לתפריט דפדוף", callback_data=f"browse_page:{collection_id}:1")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    # Build header text
+    header_text = f"📄 פריט {item_index + 1} מתוך {total_items}"
+    if text_content:
+        header_text += f"\n\n{text_content}"
+
+    # Delete the old message first
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=query.message.message_id)
+    except Exception:
+        pass
+
+    # Send item based on content type
+    try:
+        if content_type == "text" or not file_id:
+            # Text-only item
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=header_text,
+                reply_markup=reply_markup
+            )
+        elif content_type == "photo":
+            await context.bot.send_photo(
+                chat_id=chat_id,
+                photo=file_id,
+                caption=header_text,
+                reply_markup=reply_markup
+            )
+        elif content_type == "video":
+            await context.bot.send_video(
+                chat_id=chat_id,
+                video=file_id,
+                caption=header_text,
+                reply_markup=reply_markup
+            )
+        elif content_type == "document":
+            await context.bot.send_document(
+                chat_id=chat_id,
+                document=file_id,
+                caption=header_text,
+                reply_markup=reply_markup
+            )
+        else:
+            # Fallback for unknown content types
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=header_text,
+                reply_markup=reply_markup
+            )
+    except Exception as e:
+        logger.error(f"Error sending scroll item: {e}")
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"שגיאה בטעינת הפריט.\n\n{header_text}",
+            reply_markup=reply_markup
+        )
 
 
 async def handle_browse_group_or_select_all_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2562,6 +2703,7 @@ def main():
     
     app.add_handler(CallbackQueryHandler(handle_select_collection_callback, pattern=r"^select_collection:"))
     app.add_handler(CallbackQueryHandler(handle_browse_page_callback, pattern=r"^browse_page:"))
+    app.add_handler(CallbackQueryHandler(handle_scroll_view_callback, pattern=r"^scroll_view:"))
     app.add_handler(
         CallbackQueryHandler(
             handle_browse_group_or_select_all_callback,
