@@ -942,6 +942,7 @@ async def browse(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+
 async def handle_browse_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """תצוגת עמוד דפדוף: כל עמוד עד 100 פריטים, מחולק לקבוצות של 10"""
     query = update.callback_query
@@ -1582,8 +1583,15 @@ async def id_file_flow(message, user, context, edit_message_id: int = None):
         [InlineKeyboardButton("⬅ חזור לתפריט ראשי", callback_data="back_to_main")]
     ])
     
-    temp_update = type('obj', (object,), {'effective_chat': message.chat, 'effective_user': user})()
-    await send_response(temp_update, context, text, keyboard, edit_message_id)
+    if edit_message_id:
+        await context.bot.edit_message_text(
+            chat_id=message.chat_id,
+            message_id=edit_message_id,
+            text=text,
+            reply_markup=keyboard
+        )
+    else:
+        await message.reply_text(text, reply_markup=keyboard)
 
 
 async def id_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
