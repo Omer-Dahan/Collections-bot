@@ -33,27 +33,27 @@ import db
 from admin_panel import admin_panel, handle_admin_callback
 
 
-# פילטר מותאם אישית - רק לוגים של פעולות משתמשים ושגיאות
+# Custom filter - only user action logs and errors
 class UserActionFilter(logging.Filter):
     def filter(self, record):
-        # אפשר רק לוגים מהבוט שלנו או שגיאות
-        if record.levelno >= logging.WARNING:  # שגיאות תמיד
+        # Allow only WARNING and above or logs from our bot (__main__)
+        if record.levelno >= logging.WARNING:  # Errors always
             return True
-        # רק לוגים מ-__main__ (הבוט שלנו)
+        # Only logs from __main__ (our bot)
         return record.name == "__main__"
 
-# Handler לקובץ - רק פעולות משתמשים ושגיאות
+# File handler - only user actions and errors
 file_handler = logging.FileHandler("bot.log", encoding="utf-8")
 file_handler.setLevel(logging.INFO)
 file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s]: %(message)s"))
 file_handler.addFilter(UserActionFilter())
 
-# Handler לקונסול - הכל
+# Console handler - everything
 console_handler = logging.StreamHandler(sys.stdout)
 console_handler.setLevel(logging.INFO)
 console_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
 
-# הגדרת root logger
+# Define root logger
 logging.basicConfig(
     level=logging.INFO,
     handlers=[file_handler, console_handler]
@@ -62,15 +62,66 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def send_response(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, keyboard=None, edit_message_id: int = None, parse_mode=None):
+    """
+    Helper function to send or edit a message.
+    Reduces code duplication by handling both cases in one place.
+    """
+    chat_id = update.effective_chat.id
+    
+    if edit_message_id:
+        try:
+            return await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=edit_message_id,
+                text=text,
+                reply_markup=keyboard,
+                parse_mode=parse_mode
+            )
+        except Exception as e:
+            logger.debug(f"Failed to edit message {edit_message_id}: {e}")
+            # Fall through to send new message
+    
+    # Send new message
+    return await context.bot.send_message(
+        chat_id=chat_id,
+        text=text,
+        reply_markup=keyboard,
+        parse_mode=parse_mode
+    )
+
+
+async def show_collections_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, callback_prefix: str, text: str, edit_message_id: int = None, extra_buttons: list = None):
+    """
+    Helper to show a list of collections as a menu.
+    Reduces code duplication for collection selection flows.
+    """
+    collections = db.get_collections(user_id)
+    
+    if not collections:
+        await send_response(update, context, MSG_NO_COLLECTIONS, edit_message_id=edit_message_id)
+        return
+    
+    keyboard = build_collection_keyboard(collections, callback_prefix, add_back_button=True)
+    
+    if extra_buttons:
+        # Prepend extra buttons (like Import)
+        for btn_row in reversed(extra_buttons):
+            keyboard.insert(0, btn_row)
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await send_response(update, context, text, reply_markup, edit_message_id)
+
+
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     err = context.error
 
-    # שגיאות רשת כמו httpx.ReadError, timeouts וכו - לא מעניינים אותנו בלוג
+    # Network errors like httpx.ReadError, timeouts etc - ignore in logs
     if isinstance(err, NetworkError) or "ReadError" in str(err):
         logger.warning(f"Network issue ignored: {err}")
         return
 
-    # כל שאר השגיאות - כן נרצה לראות עם סטאקטרייס
+    # All other errors - log with stacktrace
     logger.exception("Exception while handling update", exc_info=err)
 
 
@@ -347,8 +398,7 @@ async def send_main_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         except Exception:
-            # If edit fails (e.g. message deleted), fall through to send new
-            pass
+           pass
 
     msg = await context.bot.send_message(
         chat_id=chat_id,
@@ -394,7 +444,7 @@ async def batch_status_loop(chat_id: int, collection_id: int, collection_name: s
                 keyboard = InlineKeyboardMarkup([
                     [
                         InlineKeyboardButton("📊 מצב איסוף", callback_data=f"batch_status:{collection_id}"),
-                        InlineKeyboardButton("🏠 חזרה לבית", callback_data="back_to_main") # Changed to main menu/home as requested
+                        InlineKeyboardButton("🏠 חזרה לבית", callback_data="back_to_main")
                     ]
                 ])
                 
@@ -419,7 +469,7 @@ async def batch_status_loop(chat_id: int, collection_id: int, collection_name: s
 
 
 async def update_batch_status(message, context: ContextTypes.DEFAULT_TYPE, collection_name: str):
-    """עדכון הודעת סטטוס איסוף קבצים - מערכת throttled"""
+    """Update file collection status message - throttled system"""
     user_id = message.from_user.id
     
     # Get active collection for this user
@@ -461,7 +511,7 @@ async def update_batch_status(message, context: ContextTypes.DEFAULT_TYPE, colle
 
 
 async def delete_message_after_delay(bot, chat_id: int, message_id: int, delay: int):
-    """מחיקת הודעה אחרי השהייה"""
+    """Delete a message after delay"""
     await asyncio.sleep(delay)
     try:
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
@@ -476,9 +526,9 @@ def build_page_menu(
     items_in_block: int,
     group_size: int = 10,
 ) -> InlineKeyboardMarkup:
-    """תפריט לדפדוף: בחר הכל ומתחת מספרים שכל אחד מייצג קבוצה של פריטים"""
+    """Browsing menu: Select All and below numbers representing groups of items"""
 
-    # שורה ראשונה: בחר הכל
+    # First row: Select All
     row_select_all = [
         InlineKeyboardButton(
             "✳ בחר הכל",
@@ -486,14 +536,14 @@ def build_page_menu(
         )
     ]
 
-    # כמה קבוצות צריך בעמוד הזה
+    # How many groups needed in this page
     groups_count = math.ceil(items_in_block / group_size)
-    groups_count = min(groups_count, 10)  # עד 10 קבוצות לעמוד
+    groups_count = min(groups_count, 10)  # Up to 10 groups per page
 
     row_numbers_1: list[InlineKeyboardButton] = []
     row_numbers_2: list[InlineKeyboardButton] = []
 
-    # בסיס לתצוגה של המספרים בהתאם לעמוד
+    # Base for number display according to page
     display_base = (page - 1) * 10
 
     for idx in range(1, groups_count + 1):
@@ -513,7 +563,7 @@ def build_page_menu(
     if row_numbers_2:
         keyboard.append(row_numbers_2)
 
-    # ניווט בין עמודי ה 100
+    # Navigation between 100-item pages
     nav_row: list[InlineKeyboardButton] = []
     if page > 1:
         nav_row.append(
@@ -570,25 +620,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def new_collection_flow(message, user, context, args: list[str], edit_message_id: int = None):
+    # Create a temporary Update object for send_response
+    temp_update = type('obj', (object,), {'effective_chat': message.chat, 'effective_user': user})()
+    
     if not args:
         context.user_data["creating_collection_mode"] = True
         
-        if edit_message_id:
-            await context.bot.edit_message_text(
-                chat_id=message.chat_id,
-                message_id=edit_message_id,
-                text="מתחיל ביצירת אוסף חדש 🗂\nאיך לקרוא לאוסף?",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("⬅ חזור לתפריט ראשי", callback_data="back_to_main")]
-                ])
-            )
-        else:
-            await message.reply_text(
-                "מתחיל ביצירת אוסף חדש 🗂\nאיך לקרוא לאוסף?",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("⬅ חזור לתפריט ראשי", callback_data="back_to_main")]
-                ])
-            )
+        text = "מתחיל ביצירת אוסף חדש 🗂\nאיך לקרוא לאוסף?"
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅ חזור לתפריט ראשי", callback_data="back_to_main")]
+        ])
+        await send_response(temp_update, context, text, keyboard, edit_message_id)
         return
 
     name = " ".join(args)
@@ -704,73 +746,29 @@ async def new_collection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await new_collection_flow(update.message, user, context, context.args)
 
 
-async def list_collections_flow(message, user, context, edit_message_id: int = None):
+async def list_collections_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, edit_message_id: int = None):
+    user = update.effective_user
     collections = db.get_collections(user.id)
-    if not collections:
-        text = MSG_NO_COLLECTIONS
-        if edit_message_id:
-            await context.bot.edit_message_text(
-                chat_id=message.chat_id,
-                message_id=edit_message_id,
-                text=text
-            )
-        else:
-            await message.reply_text(text)
-        return
-
-    keyboard = build_collection_keyboard(collections, "select_collection", add_back_button=True)
-    text = "בחר אוסף פעיל:"
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    if edit_message_id:
-        await context.bot.edit_message_text(
-            chat_id=message.chat_id,
-            message_id=edit_message_id,
-            text=text,
-            reply_markup=reply_markup
-        )
-    else:
-        await message.reply_text(text, reply_markup=reply_markup)
+    await show_collections_menu(update, context, user.id, "select_collection", "בחר אוסף פעיל:", edit_message_id)
 
 
 async def list_collections(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     track_and_reset_user(user, context)
     
-    await list_collections_flow(update.message, user, context)
+    await list_collections_flow(update, context)
 
 
-async def manage_collections_flow(message, user, context, edit_message_id: int = None):
-    collections = db.get_collections(user.id)
-    if not collections:
-        text = MSG_NO_COLLECTIONS
-        if edit_message_id:
-            await context.bot.edit_message_text(
-                chat_id=message.chat_id,
-                message_id=edit_message_id,
-                text=text
-            )
-        else:
-            await message.reply_text(text)
-        return
-
-    keyboard = build_collection_keyboard(collections, "manage_collection", add_back_button=True)
+async def manage_collections_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, edit_message_id: int = None):
+    user = update.effective_user
     
-    # Add Import Button
-    keyboard.insert(0, [InlineKeyboardButton("📥 יבוא אוסף מקובץ", callback_data="import_collection_mode")])
+    extra_buttons = [[InlineKeyboardButton("📥 יבוא אוסף מקובץ", callback_data="import_collection_mode")]]
     
-    text = "בחר אוסף לניהול:"
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    if edit_message_id:
-        await context.bot.edit_message_text(
-            chat_id=message.chat_id,
-            message_id=edit_message_id,
-            text=text,
-            reply_markup=reply_markup
-        )
-    else:
-        await message.reply_text(text, reply_markup=reply_markup)
+    await show_collections_menu(
+        update, context, user.id, "manage_collection", 
+        "בחר אוסף לניהול:", edit_message_id, 
+        extra_buttons=extra_buttons
+    )
 
 
 async def handle_import_collection_mode_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -784,17 +782,17 @@ async def handle_import_collection_mode_callback(update: Update, context: Contex
     context.user_data["import_mode"] = True
     
     text = (
-        "📥 **מצב יבוא אוסף הופעל**\n\n"
-        "אנא שלח כעת את קובץ ה-TXT שיוצא מהבוט.\n"
-        "הבוט יסרוק את הקובץ, יזהה את הפריטים וישחזר את האוסף מחדש.\n\n"
-        "שלח את הקובץ כעת..."
+        "📥 **Import mode activated**\n\n"
+        "Please send the TXT file exported from the bot.\n"
+        "The bot will scan the file, identify the items, and restore the collection.\n\n"
+        "Send the file now..."
     )
     
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⬅ חזור לתפריט ראשי", callback_data="back_to_main")]
+        [InlineKeyboardButton("⬅ Back to Main Menu", callback_data="back_to_main")]
     ])
     
-    await query.edit_message_text(text=text, reply_markup=keyboard, parse_mode="Markdown")
+    await send_response(update, context, text, keyboard, edit_message_id=query.message.message_id, parse_mode="Markdown")
 
 
 async def manage_collections(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -927,19 +925,9 @@ async def show_browse_menu(chat_id: int, user_id: int, context: ContextTypes.DEF
     text = "בחר אוסף לדפדוף:"
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    if edit_message_id:
-        await context.bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=edit_message_id,
-            text=text,
-            reply_markup=reply_markup
-        )
-    else:
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            reply_markup=reply_markup
-        )
+    # Create temp Update object for send_response
+    temp_update = type('obj', (object,), {'effective_chat': type('obj', (object,), {'id': chat_id})()})()
+    await send_response(temp_update, context, text, reply_markup, edit_message_id)
 
 
 async def browse(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -952,7 +940,6 @@ async def browse(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id=user.id,
         context=context
     )
-
 
 
 async def handle_browse_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1524,26 +1511,16 @@ async def remove_flow(message, user, context, args: list[str], edit_message_id: 
     
     if total_items == 0:
         text = "האוספים שלך ריקים. אין מה למחוק."
-        if edit_message_id:
-             await context.bot.edit_message_text(chat_id=message.chat_id, message_id=edit_message_id, text=text)
-        else:
-             await message.reply_text(text)
+        temp_update = type('obj', (object,), {'effective_chat': message.chat, 'effective_user': user})()
+        await send_response(temp_update, context, text, edit_message_id=edit_message_id)
         return
 
     # Build collection list for selection
     keyboard = build_collection_keyboard(collections, "delete_select_collection", add_back_button=True)
     text = "🗑 **מצב מחיקה**\n\nבחר אוסף שממנו תרצה למחוק פריטים:"
     
-    if edit_message_id:
-        await context.bot.edit_message_text(
-            chat_id=message.chat_id,
-            message_id=edit_message_id,
-            text=text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
-        )
-    else:
-        await message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    temp_update = type('obj', (object,), {'effective_chat': message.chat, 'effective_user': user})()
+    await send_response(temp_update, context, text, InlineKeyboardMarkup(keyboard), edit_message_id, parse_mode="Markdown")
 
 
 async def remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1605,15 +1582,8 @@ async def id_file_flow(message, user, context, edit_message_id: int = None):
         [InlineKeyboardButton("⬅ חזור לתפריט ראשי", callback_data="back_to_main")]
     ])
     
-    if edit_message_id:
-        await context.bot.edit_message_text(
-            chat_id=message.chat_id,
-            message_id=edit_message_id,
-            text=text,
-            reply_markup=keyboard
-        )
-    else:
-        await message.reply_text(text, reply_markup=keyboard)
+    temp_update = type('obj', (object,), {'effective_chat': message.chat, 'effective_user': user})()
+    await send_response(temp_update, context, text, keyboard, edit_message_id)
 
 
 async def id_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
