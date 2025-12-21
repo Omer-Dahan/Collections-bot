@@ -154,7 +154,7 @@ def build_collection_keyboard(collections, callback_prefix: str, add_back_button
         for col_id, name in collections
     ]
     if add_back_button:
-        keyboard.append([InlineKeyboardButton("⬅ חזור לתפריט ראשי", callback_data="back_to_main")])
+        keyboard.append([InlineKeyboardButton("🏠 חזור לתפריט ראשי", callback_data="back_to_main")])
     return keyboard
 
 
@@ -628,7 +628,8 @@ async def new_collection_flow(message, user, context, args: list[str], edit_mess
         
         text = "מתחיל ביצירת אוסף חדש 🗂\nאיך לקרוא לאוסף?"
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⬅ חזור לתפריט ראשי", callback_data="back_to_main")]
+            [InlineKeyboardButton("📥 יבוא אוסף מקובץ", callback_data="import_collection_mode")],
+            [InlineKeyboardButton("🏠 חזור לתפריט ראשי", callback_data="back_to_main")]
         ])
         await send_response(temp_update, context, text, keyboard, edit_message_id)
         return
@@ -734,7 +735,8 @@ async def handle_retry_create_collection(update: Update, context: ContextTypes.D
     await query.edit_message_text(
         "מתחיל ביצירת אוסף חדש 🗂\nאיך לקרוא לאוסף?",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("⬅ חזור לתפריט ראשי", callback_data="back_to_main")]
+            [InlineKeyboardButton("📥 יבא אוסף מקובץ", callback_data="import_collection_mode")],
+            [InlineKeyboardButton("🏠 חזור לתפריט ראשי", callback_data="back_to_main")]
         ])
     )
 
@@ -762,12 +764,9 @@ async def list_collections(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def manage_collections_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, edit_message_id: int = None):
     user = update.effective_user
     
-    extra_buttons = [[InlineKeyboardButton("📥 יבוא אוסף מקובץ", callback_data="import_collection_mode")]]
-    
     await show_collections_menu(
         update, context, user.id, "manage_collection", 
-        "בחר אוסף לניהול:", edit_message_id, 
-        extra_buttons=extra_buttons
+        "בחר אוסף לניהול:", edit_message_id
     )
 
 
@@ -782,14 +781,14 @@ async def handle_import_collection_mode_callback(update: Update, context: Contex
     context.user_data["import_mode"] = True
     
     text = (
-        "📥 **Import mode activated**\n\n"
-        "Please send the TXT file exported from the bot.\n"
-        "The bot will scan the file, identify the items, and restore the collection.\n\n"
-        "Send the file now..."
+        "📥 **מצב יבוא הופעל**\n\n"
+        "אנא שלח את קובץ ה-TXT שיוצא מהבוט.\n"
+        "הבוט יסרוק את הקובץ, יזהה את הפריטים, וישחזר את האוסף.\n\n"
+        "שלח את הקובץ עכשיו..."
     )
     
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⬅ Back to Main Menu", callback_data="back_to_main")]
+        [InlineKeyboardButton("🏠 חזור לתפריט ראשי", callback_data="back_to_main")]
     ])
     
     await send_response(update, context, text, keyboard, edit_message_id=query.message.message_id, parse_mode="Markdown")
@@ -920,7 +919,7 @@ async def show_browse_menu(chat_id: int, user_id: int, context: ContextTypes.DEF
     ]
     
     # Add Back button
-    keyboard.append([InlineKeyboardButton("⬅️ חזור לתפריט ראשי", callback_data="back_to_main")])
+    keyboard.append([InlineKeyboardButton("🏠 חזור לתפריט ראשי", callback_data="back_to_main")])
 
     text = "בחר אוסף לדפדוף:"
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1580,7 +1579,7 @@ async def id_file_flow(message, user, context, edit_message_id: int = None):
     )
     
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⬅ חזור לתפריט ראשי", callback_data="back_to_main")]
+        [InlineKeyboardButton("🏠 חזור לתפריט ראשי", callback_data="back_to_main")]
     ])
     
     if edit_message_id:
@@ -1613,11 +1612,11 @@ async def handle_main_menu_button(update: Update, context: ContextTypes.DEFAULT_
     if action == "newcollection":
         await new_collection_flow(query.message, user, context, args=[], edit_message_id=message_id)
     elif action == "collections":
-        await list_collections_flow(query.message, user, context, edit_message_id=message_id)
+        await list_collections_flow(update, context, edit_message_id=message_id)
     elif action == "browse":
         await show_browse_menu(query.message.chat_id, user.id, context, edit_message_id=message_id)
     elif action == "manage":
-        await manage_collections_flow(query.message, user, context, edit_message_id=message_id)
+        await manage_collections_flow(update, context, edit_message_id=message_id)
     elif action == "remove":
         await remove_flow(query.message, user, context, args=[], edit_message_id=message_id)
     elif action == "id_file":
@@ -1699,19 +1698,43 @@ async def process_imported_collection(message, context: ContextTypes.DEFAULT_TYP
         content_bytes = await file.download_as_bytearray()
         content = content_bytes.decode('utf-8')
         
-        # Parse IDs
-        item_ids = []
+        # Parse items from the export file
+        items_data = []
+        current_item = {}
+        
         for line in content.splitlines():
             line = line.strip()
+            
+            # Skip header lines and separators
+            if line.startswith("Collection:") or line.startswith("Total items:") or line.startswith("=") or line.startswith("-") or not line:
+                continue
+            
+            # Parse each field
             if line.startswith("ID:"):
-                try:
-                    parts = line.split(":")
-                    if len(parts) > 1:
-                        item_ids.append(int(parts[1].strip()))
-                except ValueError:
-                    pass
+                # Start of new item - save previous if exists
+                if current_item and current_item.get("file_id"):
+                    items_data.append(current_item)
+                current_item = {}
+            elif line.startswith("Type:"):
+                current_item["content_type"] = line.split(":", 1)[1].strip()
+            elif line.startswith("File ID:"):
+                current_item["file_id"] = line.split(":", 1)[1].strip()
+            elif line.startswith("Filename:"):
+                current_item["file_name"] = line.split(":", 1)[1].strip()
+            elif line.startswith("Size:"):
+                # Skip size parsing as we don't need to convert it back
+                pass
+            elif line.startswith("Caption:"):
+                current_item["text_content"] = line.split(":", 1)[1].strip()
+            elif line.startswith("Added:"):
+                # Skip timestamp
+                pass
         
-        if not item_ids:
+        # Add last item if exists
+        if current_item and current_item.get("file_id"):
+            items_data.append(current_item)
+        
+        if not items_data:
             await message.reply_text("❌ לא נמצאו פריטים לייבוא בקובץ זה.")
             return
             
@@ -1719,7 +1742,7 @@ async def process_imported_collection(message, context: ContextTypes.DEFAULT_TYP
         original_name = doc.file_name.replace("_export.txt", "").replace(".txt", "")
         new_name = original_name
         
-        # Remove "export" if present loosely (though the replacement above covers the standard format)
+        # Remove "export" if present loosely
         if new_name.endswith(" export"):
              new_name = new_name[:-7]
              
@@ -1738,47 +1761,44 @@ async def process_imported_collection(message, context: ContextTypes.DEFAULT_TYP
             else:
                  raise e
                  
-        # Copy items
+        # Add items to new collection
         import_count = 0
         skipped_count = 0
         
-        status_msg = await message.reply_text(f"📥 משחזר {len(item_ids)} פריטים לאוסף '{new_name}'...")
+        status_msg = await message.reply_text(f"📥 משחזר {len(items_data)} פריטים לאוסף '{new_name}'...")
         
-        for item_id in item_ids:
-            item = db.get_item_by_id(item_id)
-            if not item:
-                skipped_count += 1
-                continue
+        for item_data in items_data:
+            try:
+                # Create new item from parsed data
+                db.add_item(
+                    collection_id=new_collection_id,
+                    content_type=item_data.get("content_type", "unknown"),
+                    file_id=item_data.get("file_id"),
+                    text_content=item_data.get("text_content"),
+                    file_name=item_data.get("file_name"),
+                    file_size=None  # We don't parse file size back, it's just for display
+                )
+                import_count += 1
                 
-            # item structure: id, content_type, file_id, text_content, file_name, file_size, added_at
-            _, content_type, file_id, text_content, file_name, file_size, _ = item
-            
-            db.add_item(
-                collection_id=new_collection_id,
-                content_type=content_type,
-                file_id=file_id,
-                text_content=text_content,
-                file_name=file_name,
-                file_size=file_size
-            )
-            import_count += 1
-            
-            if import_count % 20 == 0:
-                 try:
-                     await context.bot.edit_message_text(
-                         chat_id=message.chat_id,
-                         message_id=status_msg.message_id,
-                         text=f"📥 משחזר... {import_count}/{len(item_ids)} פריטים"
-                     )
-                 except Exception:
-                     pass
+                if import_count % 20 == 0:
+                     try:
+                         await context.bot.edit_message_text(
+                             chat_id=message.chat_id,
+                             message_id=status_msg.message_id,
+                             text=f"📥 משחזר... {import_count}/{len(items_data)} פריטים"
+                         )
+                     except Exception:
+                         pass
+            except Exception as e:
+                logger.error(f"Failed to import item: {e}")
+                skipped_count += 1
 
         # Cleanup
         context.user_data.pop("import_mode", None)
         
         # Final message
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⬅ חזור לתפריט ראשי", callback_data="back_to_main")]
+            [InlineKeyboardButton("🏠 חזור לתפריט ראשי", callback_data="back_to_main")]
         ])
         
         await context.bot.edit_message_text(
@@ -1788,7 +1808,7 @@ async def process_imported_collection(message, context: ContextTypes.DEFAULT_TYP
                 f"✅ **היבוא הושלם בהצלחה!**\n\n"
                 f"📁 אוסף חדש: {new_name}\n"
                 f"📥 פריטים שיובאו: {import_count}\n"
-                f"⏭️ פריטים שדולגו (לא נמצאו): {skipped_count}"
+                f"⏭️ פריטים שדולגו: {skipped_count}"
             ),
             reply_markup=keyboard,
             parse_mode="Markdown"
@@ -2001,7 +2021,7 @@ async def handle_delete_message(update: Update, context: ContextTypes.DEFAULT_TY
 
     # Button to go back to main menu
     main_menu_keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⬅ חזור לתפריט ראשי", callback_data="back_to_main")]
+        [InlineKeyboardButton("🏠 חזור לתפריט ראשי", callback_data="back_to_main")]
     ])
 
     file_id = None
@@ -2059,7 +2079,7 @@ async def handle_id_file_message(update: Update, context: ContextTypes.DEFAULT_T
         [
             [
                 InlineKeyboardButton(
-                    text="⬅ חזרה לתפריט הראשי",
+                    text="🏠 חזור לתפריט ראשי",
                     callback_data="back_to_main",
                 )
             ]
@@ -2516,9 +2536,11 @@ async def handle_share_code_input(update: Update, context: ContextTypes.DEFAULT_
     collection_info = db.get_collection_by_share_code(share_code)
     
     if not collection_info:
+        keyboard = [[InlineKeyboardButton("🏠 חזור לתפריט ראשי", callback_data="back_to_main")]]
         await message.reply_text(
             "❌ קוד שיתוף לא תקין או שפג תוקפו.\n\n"
-            "ודא שהקוד נכון ושהשיתוף עדיין פעיל."
+            "ודא שהקוד נכון ושהשיתוף עדיין פעיל.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return True
     
@@ -2551,7 +2573,11 @@ async def handle_share_code_input(update: Update, context: ContextTypes.DEFAULT_
     )
 
     if total_items == 0:
-        await message.reply_text("האוסף המשותף ריק כרגע.")
+        keyboard = [[InlineKeyboardButton("🏠 חזור לתפריט ראשי", callback_data="back_to_main")]]
+        await message.reply_text(
+            "האוסף המשותף ריק כרגע.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return True
     
     reply_markup = build_page_menu(
@@ -2606,7 +2632,17 @@ async def handle_cancel_share_access_callback(update: Update, context: ContextTy
     
     context.user_data.pop("waiting_for_share_code", None)
     
-    await query.edit_message_text("❌ בוטל.")
+    # Edit to main menu instead of leaving user stuck
+    text = get_main_menu_text()
+    keyboard = build_main_menu_keyboard()
+    
+    await query.edit_message_text(
+        text=text,
+        reply_markup=keyboard
+    )
+    
+    # Update main_menu_msg_id to reference this message
+    context.user_data["main_menu_msg_id"] = query.message.message_id
 
 
 async def handle_delete_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -2628,11 +2664,18 @@ async def handle_delete_confirmation(update: Update, context: ContextTypes.DEFAU
         
         if success:
             logger.info(f"Collection {collection_id} successfully deleted by user {update.message.from_user.id}")
-            await update.message.reply_text("✅ האוסף נמחק בהצלחה!")
-            await send_main_menu(update.message.chat_id, context)
+            keyboard = [[InlineKeyboardButton("🏠 חזור לתפריט ראשי", callback_data="back_to_main")]]
+            await update.message.reply_text(
+                "✅ האוסף נמחק בהצלחה!",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         else:
             logger.error(f"Failed to delete collection {collection_id} - check db.py logs for details")
-            await update.message.reply_text("❌ שגיאה במחיקת האוסף. נא לנסות שוב או ליצור קשר עם התמיכה.")
+            keyboard = [[InlineKeyboardButton("🏠 חזור לתפריט ראשי", callback_data="back_to_main")]]
+            await update.message.reply_text(
+                "❌ שגיאה במחיקת האוסף. נא לנסות שוב או ליצור קשר עם התמיכה.",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         return True
     
