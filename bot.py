@@ -133,7 +133,7 @@ def reset_user_modes(context: ContextTypes.DEFAULT_TYPE):
     """Reset all user modes when a new command is issued"""
     for key in ["delete_mode", "id_mode", "waiting_for_share_code", 
                 "verify_delete_collection", "verify_send_collection",
-                "import_mode"]:
+                "import_mode", "creating_collection_mode", "temp_collection_name"]:
         context.user_data.pop(key, None)
 
 
@@ -662,6 +662,10 @@ async def new_collection_flow(message, user, context, args: list[str], edit_mess
 
 async def handle_new_collection_name_input(message, context: ContextTypes.DEFAULT_TYPE):
     """Handle text input for new collection name"""
+    if not message.text:
+        await message.reply_text("אנא שלח שם תקין לאוסף (טקסט בלבד).")
+        return
+
     name = message.text.strip()
     if not name or name.startswith("/"):
         await message.reply_text("אנא שלח שם תקין לאוסף (טקסט בלבד).")
@@ -735,7 +739,7 @@ async def handle_retry_create_collection(update: Update, context: ContextTypes.D
     await query.edit_message_text(
         "מתחיל ביצירת אוסף חדש 🗂\nאיך לקרוא לאוסף?",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📥 יבא אוסף מקובץ", callback_data="import_collection_mode")],
+            [InlineKeyboardButton("📥 יבוא אוסף מקובץ", callback_data="import_collection_mode")],
             [InlineKeyboardButton("🏠 חזור לתפריט ראשי", callback_data="back_to_main")]
         ])
     )
@@ -775,9 +779,8 @@ async def handle_import_collection_mode_callback(update: Update, context: Contex
     query = update.callback_query
     await query.answer()
     
-    user = query.from_user
-    track_and_reset_user(user, context)
-    
+    # Reset all modes before activating import mode
+    reset_user_modes(context)
     context.user_data["import_mode"] = True
     
     text = (
@@ -990,10 +993,13 @@ async def handle_browse_page_callback(update: Update, context: ContextTypes.DEFA
         back_data = f"admin_manage_col:{collection_id}"
     
     keyboard_list = list(reply_markup.inline_keyboard)
-    # Add scroll view button and back button on the same row
+    # Add scroll view button and back button on the same row, then Main Menu on new row
     keyboard_list.append([
         InlineKeyboardButton("🔄 צפייה בגלילה", callback_data=f"scroll_view:{collection_id}:0"),
         InlineKeyboardButton(back_text, callback_data=back_data)
+    ])
+    keyboard_list.append([
+         InlineKeyboardButton("🏠 חזור לתפריט ראשי", callback_data="back_to_main")
     ])
     reply_markup = InlineKeyboardMarkup(keyboard_list)
 
@@ -1712,7 +1718,7 @@ async def process_imported_collection(message, context: ContextTypes.DEFAULT_TYP
             # Parse each field
             if line.startswith("ID:"):
                 # Start of new item - save previous if exists
-                if current_item and current_item.get("file_id"):
+                if current_item and (current_item.get("file_id") or current_item.get("text_content")):
                     items_data.append(current_item)
                 current_item = {}
             elif line.startswith("Type:"):
@@ -1731,7 +1737,7 @@ async def process_imported_collection(message, context: ContextTypes.DEFAULT_TYP
                 pass
         
         # Add last item if exists
-        if current_item and current_item.get("file_id"):
+        if current_item and (current_item.get("file_id") or current_item.get("text_content")):
             items_data.append(current_item)
         
         if not items_data:
@@ -2461,11 +2467,10 @@ async def handle_delete_collection_callback(update: Update, context: ContextType
     verification_code = create_verification_code(context, "delete_collection", data)
     
     message_text = (
-        f"⚠️ אזהרה: מחיקת אוסף\n\n"
-        f"אוסף: {collection_name}\n"
+        f"⚠️ בטוח שאתה רוצה למחוק את האוסף?\n\n"
+        f"שם האוסף: {collection_name}\n"
         f"פריטים: {item_count}\n\n"
-        f"🔢 קוד אימות: `{verification_code}`\n\n"
-        f"שלח את הקוד הזה כדי לאשר את המחיקה."
+        f"שלח את הקוד {verification_code} כדי לאשר את המחיקה."
     )
     
     keyboard = [[InlineKeyboardButton("❌ ביטול", callback_data=f"manage_collection:{collection_id}")]]
@@ -2500,11 +2505,80 @@ async def handle_back_to_manage_callback(update: Update, context: ContextTypes.D
 
 # Shared Collection Access Handlers
 
+async def activate_shared_collection(update: Update, context: ContextTypes.DEFAULT_TYPE, share_code: str):
+    """
+    Helper to activate shared collection access.
+    Consolidates logic for both /access command and interactive flow.
+    """
+    collection_info = db.get_collection_by_share_code(share_code)
+    
+    user = update.effective_user
+    
+    if not collection_info:
+        keyboard = [[InlineKeyboardButton("🏠 חזור לתפריט ראשי", callback_data="back_to_main")]]
+        text = "❌ קוד שיתוף לא תקין או שפג תוקפו.\nודא שהקוד נכון ושהשיתוף עדיין פעיל."
+        await send_response(update, context, text, InlineKeyboardMarkup(keyboard))
+        return False
+    
+    collection_id, collection_name, owner_id = collection_info
+    
+    # Log access
+    db.log_share_access(share_code, user.id)
+    
+    # Save shared collection state
+    active_shared_collections[user.id] = share_code
+    
+    # Prepare browse view (Page 1)
+    block_size = 100
+    page = 1
+    
+    # Use helper for pagination
+    header_text, total_items, total_pages, items_in_block, page, _ = get_page_header(
+        collection_id, page, block_size
+    )
+
+    if total_items == 0:
+        keyboard = [[InlineKeyboardButton("🏠 חזור לתפריט ראשי", callback_data="back_to_main")]]
+        text = f"✅ גישה לאוסף משותף: 🔗 {collection_name}\n\nהאוסף המשותף ריק כרגע."
+        await send_response(update, context, text, InlineKeyboardMarkup(keyboard))
+        return True
+    
+    reply_markup = build_page_menu(
+        collection_id=collection_id,
+        page=page,
+        total_pages=total_pages,
+        items_in_block=items_in_block,
+        group_size=10,
+    )
+    
+    # Add exit shared collection button
+    keyboard_list = list(reply_markup.inline_keyboard)
+    keyboard_list.append([InlineKeyboardButton("❌ יציאה מאוסף משותף", callback_data="exit_shared_collection")])
+    reply_markup = InlineKeyboardMarkup(keyboard_list)
+    
+    # Combined Success + Browse Message
+    combined_text = (
+        f"✅ גישה לאוסף משותף: 🔗 {collection_name}\n"
+        f"אתה יכול כעת לצפות ולשלוח קבצים מהאוסף.\n"
+        f"לא ניתן להוסיף קבצים חדשים לאוסף משותף.\n\n"
+        f"{header_text}"
+    )
+    
+    await send_response(update, context, combined_text, reply_markup)
+    return True
+
+
 async def access_shared(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Command to access a shared collection via code"""
     user = update.effective_user
     track_and_reset_user(user, context)
     
+    # Check if code was provided in args
+    if context.args:
+        code = context.args[0]
+        await activate_shared_collection(update, context, code)
+        return
+
     # Set mode to wait for share code
     context.user_data["waiting_for_share_code"] = True
     
@@ -2526,78 +2600,12 @@ async def handle_share_code_input(update: Update, context: ContextTypes.DEFAULT_
     if not message or not message.text:
         return False
     
-    user = message.from_user
     share_code = message.text.strip()
     
     # Clear waiting state
     context.user_data.pop("waiting_for_share_code", None)
     
-    # Validate share code
-    collection_info = db.get_collection_by_share_code(share_code)
-    
-    if not collection_info:
-        keyboard = [[InlineKeyboardButton("🏠 חזור לתפריט ראשי", callback_data="back_to_main")]]
-        await message.reply_text(
-            "❌ קוד שיתוף לא תקין או שפג תוקפו.\n\n"
-            "ודא שהקוד נכון ושהשיתוף עדיין פעיל.",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return True
-    
-    collection_id, collection_name, owner_id = collection_info
-    
-    # Log access
-    db.log_share_access(share_code, user.id)
-    
-    # Save shared collection state
-    active_shared_collections[user.id] = share_code
-    
-    # Open browse page directly
-    await message.reply_text(
-        f"✅ גישה לאוסף משותף: 🔗 {collection_name}\n\n"
-        f"אתה יכול כעת לצפות ולשלוח קבצים מהאוסף.\n"
-        f"לא ניתן להוסיף קבצים חדשים לאוסף משותף."
-    )
-    
-    # Simulate browse_page callback to show the collection
-    from telegram import CallbackQuery
-    
-    # Create a fake query to reuse browse_page logic
-    block_size = 100
-    page = 1
-    
-    # Use helper for pagination
-    prefix = f"🔗 אוסף משותף: {collection_name}\n\n"
-    header_text, total_items, total_pages, items_in_block, page, _ = get_page_header(
-        collection_id, page, block_size, page_prefix=prefix
-    )
-
-    if total_items == 0:
-        keyboard = [[InlineKeyboardButton("🏠 חזור לתפריט ראשי", callback_data="back_to_main")]]
-        await message.reply_text(
-            "האוסף המשותף ריק כרגע.",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return True
-    
-    reply_markup = build_page_menu(
-        collection_id=collection_id,
-        page=page,
-        total_pages=total_pages,
-        items_in_block=items_in_block,
-        group_size=10,
-    )
-    
-    # Add exit shared collection button
-    keyboard_list = list(reply_markup.inline_keyboard)
-    keyboard_list.append([InlineKeyboardButton("❌ יציאה מאוסף משותף", callback_data="exit_shared_collection")])
-    reply_markup = InlineKeyboardMarkup(keyboard_list)
-    
-    await message.reply_text(
-        text=header_text,
-        reply_markup=reply_markup
-    )
-    
+    await activate_shared_collection(update, context, share_code)
     return True
 
 
