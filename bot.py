@@ -891,6 +891,115 @@ def build_page_file_type_menu(
     return InlineKeyboardMarkup(keyboard)
 
 
+async def show_collection_page(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    collection_id: int,
+    page: int,
+    edit_message_id: int = None,
+    force_resend: bool = False
+):
+    """
+    Central function to display a collection browse page.
+    Handles permissions, pagination, building the menu with all buttons,
+    and sending/editing the message.
+    """
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    
+    # 1. Check access
+    is_allowed, error_msg, collection = check_collection_access(user_id, collection_id)
+    if not is_allowed:
+        if edit_message_id and not force_resend:
+             try:
+                 await context.bot.edit_message_text(chat_id=chat_id, message_id=edit_message_id, text=error_msg)
+             except:
+                 await context.bot.send_message(chat_id=chat_id, text=error_msg)
+        else:
+             await context.bot.send_message(chat_id=chat_id, text=error_msg)
+        return
+
+    # 2. Pagination & Header
+    block_size = 100
+    group_size = 10
+    
+    header_text, total_items, total_pages, items_in_block, page, _ = get_page_header(
+        collection_id, page, block_size
+    )
+
+    if total_items == 0:
+        text = "אין פריטים באוסף הזה."
+        if edit_message_id and not force_resend:
+             try:
+                 await context.bot.edit_message_text(chat_id=chat_id, message_id=edit_message_id, text=text)
+             except:
+                 await context.bot.send_message(chat_id=chat_id, text=text)
+        else:
+             await context.bot.send_message(chat_id=chat_id, text=text)
+        return
+
+    # 3. Build Menu (Numbers buttons)
+    reply_markup = build_page_menu(
+        collection_id=collection_id,
+        page=page,
+        total_pages=total_pages,
+        items_in_block=items_in_block,
+        group_size=group_size,
+    )
+
+    # 4. Add Extra Buttons (Scroll, Info, Navigation)
+    keyboard_list = list(reply_markup.inline_keyboard)
+    
+    # Row: Scroll View | Info
+    keyboard_list.append([
+        InlineKeyboardButton("🔄 צפייה בגלילה", callback_data=f"scroll_view:{collection_id}:0"),
+        InlineKeyboardButton("ℹ️ מידע", callback_data=f"page_info:{collection_id}:{page}:0")
+    ])
+    
+    # Back button logic
+    # Check if admin is viewing someone else's collection
+    if is_admin(user_id) and collection[2] != user_id:
+        back_data = f"admin_manage_col:{collection_id}"
+        back_text = "⬅️ חזור לניהול האוסף"
+        keyboard_list.append([
+            InlineKeyboardButton(back_text, callback_data=back_data)
+        ])
+    
+    # Row: Main Menu (Always at the bottom)
+    keyboard_list.append([
+        InlineKeyboardButton("🏠 תפריט ראשי", callback_data="back_to_main")
+    ])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard_list)
+
+    # 5. Send/Edit Logic
+    if force_resend:
+        # Calculate fresh header text incase items were deleted/changed outside (though get_page_header does count)
+        if edit_message_id:
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=edit_message_id)
+            except:
+                pass
+        await context.bot.send_message(chat_id=chat_id, text=header_text, reply_markup=reply_markup)
+    else:
+        # Try edit
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=edit_message_id,
+                text=header_text,
+                reply_markup=reply_markup
+            )
+        except Exception:
+            # Edit failed (e.g. content same, or message too old/deleted, or type diff)
+            # Try delete and send new
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=edit_message_id)
+            except:
+                pass
+            await context.bot.send_message(chat_id=chat_id, text=header_text, reply_markup=reply_markup)
+
+
 async def show_browse_menu(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE, edit_message_id: int = None):
     """
     Shared function to display browse menu.
@@ -959,68 +1068,14 @@ async def handle_browse_page_callback(update: Update, context: ContextTypes.DEFA
     collection_id = int(col_id_str)
     page = int(page_str)
 
-    is_allowed, error_msg, collection = check_collection_access(user.id, collection_id)
-    if not is_allowed:
-        await query.edit_message_text(error_msg)
-        return
-
-    block_size = 100
-    group_size = 10
-
-    # Use helper for pagination
-    header_text, total_items, total_pages, items_in_block, page, _ = get_page_header(
-        collection_id, page, block_size
-    )
-
-    if total_items == 0:
-        await query.edit_message_text("אין פריטים באוסף הזה.")
-        return
-
-    reply_markup = build_page_menu(
+    # Use centralized function
+    await show_collection_page(
+        update=update,
+        context=context,
         collection_id=collection_id,
         page=page,
-        total_pages=total_pages,
-        items_in_block=items_in_block,
-        group_size=group_size,
+        edit_message_id=query.message.message_id
     )
-    
-    # Add Back button with context awareness
-    back_text = "⬅ חזור"
-    back_data = "back_to_browse"
-    
-    # Check if admin is viewing someone else's collection
-    if is_admin(user.id) and collection[2] != user.id:
-        back_data = f"admin_manage_col:{collection_id}"
-    
-    keyboard_list = list(reply_markup.inline_keyboard)
-    # Add scroll view button and back button on the same row, then Main Menu on new row
-    keyboard_list.append([
-        InlineKeyboardButton("🔄 צפייה בגלילה", callback_data=f"scroll_view:{collection_id}:0"),
-        InlineKeyboardButton(back_text, callback_data=back_data)
-    ])
-    keyboard_list.append([
-         InlineKeyboardButton("🏠 חזור לתפריט ראשי", callback_data="back_to_main")
-    ])
-    reply_markup = InlineKeyboardMarkup(keyboard_list)
-
-    # Try to edit the message, if it fails (e.g., coming from media message), delete and send new
-    chat_id = query.message.chat_id
-    try:
-        await query.edit_message_text(
-            text=header_text,
-            reply_markup=reply_markup,
-        )
-    except Exception:
-        # If edit fails (e.g., message has media), delete and send new
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=query.message.message_id)
-        except Exception:
-            pass
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=header_text,
-            reply_markup=reply_markup,
-        )
 
 
 async def handle_scroll_view_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1141,6 +1196,138 @@ async def handle_scroll_view_callback(update: Update, context: ContextTypes.DEFA
         )
 
 
+async def handle_page_info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """תצוגת מידע מפורט על קבצים בדף - 10 קבצים בכל פעם"""
+    query = update.callback_query
+    await query.answer()
+
+    user = query.from_user
+    data = query.data  # format: page_info:<collection_id>:<page>:<info_page>
+    
+    if not data.startswith("page_info:"):
+        return
+
+    try:
+        _, col_id_str, page_str, info_page_str = data.split(":")
+        collection_id = int(col_id_str)
+        page = int(page_str)
+        info_page = int(info_page_str)
+    except ValueError:
+        return
+
+    is_allowed, error_msg, collection = check_collection_access(user.id, collection_id)
+    if not is_allowed:
+        await query.edit_message_text(error_msg)
+        return
+
+    block_size = 100
+    info_group_size = 10
+
+    # Get items for current page block
+    offset_block = (page - 1) * block_size
+    items_block = db.get_items_by_collection(collection_id, offset=offset_block, limit=block_size)
+    
+    if not items_block:
+        await query.edit_message_text("אין פריטים בעמוד זה.")
+        return
+
+    # Calculate info page bounds
+    info_start = info_page * info_group_size
+    info_end = info_start + info_group_size
+    items_to_show = items_block[info_start:info_end]
+    
+    if not items_to_show:
+        # Reset to first info page if out of bounds
+        info_page = 0
+        info_start = 0
+        info_end = info_group_size
+        items_to_show = items_block[info_start:info_end]
+
+    total_info_pages = math.ceil(len(items_block) / info_group_size)
+    
+    # Build info text
+    content_type_map = {
+        "video": "🎬 וידאו",
+        "photo": "🖼 תמונה", 
+        "document": "📄 קובץ",
+        "audio": "🎵 אודיו",
+        "text": "📝 טקסט"
+    }
+    
+    def escape_html(text):
+        """Escape HTML special characters"""
+        if not text:
+            return text
+        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    
+    info_text = f"📋 <b>מידע על קבצים - עמוד {page}</b>\n"
+    info_text += f"מציג {info_start + 1}-{min(info_end, len(items_block))} מתוך {len(items_block)}\n\n"
+    
+    for item in items_to_show:
+        item_id, content_type, file_id, text_content, file_name, file_size, added_at = item
+        
+        type_display = content_type_map.get(content_type, "📁 קובץ")
+        # Escape HTML special characters
+        name_display = escape_html(file_name) if file_name else "(ללא שם קובץ)"
+        
+        info_text += f"סוג: {type_display}\n"
+        info_text += f"שם: {name_display}\n"
+        info_text += f"ID: <code>{item_id}</code>\n"
+        info_text += "─────────────────\n"
+    
+    # Store allowed IDs for this user (security - only allow IDs shown on current page)
+    context.user_data["allowed_item_ids"] = [item[0] for item in items_to_show]
+    context.user_data["info_page_collection_id"] = collection_id
+    
+    info_text += f"\n💡 <i>שלח את מספר ה-ID כדי לקבל את הקובץ</i>"
+    
+    # Build navigation keyboard
+    nav_buttons = []
+    if info_page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ הקודם", callback_data=f"page_info:{collection_id}:{page}:{info_page - 1}"))
+    if info_page < total_info_pages - 1:
+        nav_buttons.append(InlineKeyboardButton("הבא ➡️", callback_data=f"page_info:{collection_id}:{page}:{info_page + 1}"))
+    
+    keyboard = []
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+    keyboard.append([InlineKeyboardButton("🔙 חזור לתפריט דפדוף", callback_data=f"browse_page:{collection_id}:{page}")])
+    keyboard.append([InlineKeyboardButton("🏠 חזור לתפריט ראשי", callback_data="back_to_main")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    try:
+        await query.edit_message_text(
+            text=info_text,
+            reply_markup=reply_markup,
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.warning(f"Failed to send with HTML, trying plain text: {e}")
+        # Fallback: remove HTML tags and try without parse_mode
+        plain_text = info_text.replace("<b>", "").replace("</b>", "")
+        plain_text = plain_text.replace("<code>", "").replace("</code>", "")
+        plain_text = plain_text.replace("<i>", "").replace("</i>", "")
+        plain_text = plain_text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+        
+        try:
+            await query.edit_message_text(
+                text=plain_text,
+                reply_markup=reply_markup
+            )
+        except Exception:
+            chat_id = query.message.chat_id
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=query.message.message_id)
+            except Exception:
+                pass
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=plain_text,
+                reply_markup=reply_markup
+            )
+
+
 async def handle_browse_group_or_select_all_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """כפתורי המספרים (קבוצות) ו'בחר הכל' בעמוד דפדוף"""
     query = update.callback_query
@@ -1190,46 +1377,14 @@ async def handle_browse_group_or_select_all_callback(update: Update, context: Co
         await send_media_groups_in_chunks(context.bot, chat_id, media_visual, media_docs)
         
         if media_visual or media_docs:
-            try:
-                await context.bot.delete_message(chat_id=chat_id, message_id=query.message.message_id)
-            except Exception:
-                pass
-
-            try:
-                await context.bot.delete_message(chat_id=chat_id, message_id=query.message.message_id)
-            except Exception:
-                pass
-
-            # Use helper for pagination
-            header_text, total_items, total_pages, items_in_block, page, _ = get_page_header(
-                collection_id, page, block_size
-            )
-
-            reply_markup = build_page_menu(
+            # Show the collection page again (fresh message at bottom)
+            await show_collection_page(
+                update=update,
+                context=context,
                 collection_id=collection_id,
                 page=page,
-                total_pages=total_pages,
-                items_in_block=items_in_block,
-                group_size=group_size,
-            )
-            
-            # Add Back button with context awareness
-            back_text = "⬅️ חזור לרשימת האוספים"
-            back_data = "back_to_browse"
-            
-            # Check if admin is viewing someone else's collection
-            if is_admin(user.id) and collection[2] != user.id:
-                back_text = "⬅️ חזור לניהול האוסף"
-                back_data = f"admin_manage_col:{collection_id}"
-
-            keyboard_list = list(reply_markup.inline_keyboard)
-            keyboard_list.append([InlineKeyboardButton(back_text, callback_data=back_data)])
-            reply_markup = InlineKeyboardMarkup(keyboard_list)
-            
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=header_text,
-                reply_markup=reply_markup,
+                edit_message_id=query.message.message_id,
+                force_resend=True
             )
         else:
             await context.bot.send_message(
@@ -1350,47 +1505,15 @@ async def handle_page_file_send_choice_callback(update: Update, context: Context
     except Exception:
         pass
 
-    # Send back the browse page menu so user can continue browsing
-    block_size = 100
-    group_size = 10
-    
-    total_items = db.count_items_in_collection(collection_id)
-    total_pages = max(1, math.ceil(total_items / block_size))
-    
-    if page < 1:
-        page = 1
-    elif page > total_pages:
-        page = total_pages
-    
-    offset_block = (page - 1) * block_size
-    items_block = db.get_items_by_collection(collection_id, offset=offset_block, limit=block_size)
-    items_in_block = len(items_block)
-    
-    first_index = offset_block + 1
-    last_index = offset_block + items_in_block
-    
-    header_text = (
-        f"✅ עמוד {page} מתוך {total_pages}\n"
-        f"📦 מציג פריטים {first_index}-{last_index} מתוך {total_items}"
-    )
-    
-    reply_markup = build_page_menu(
+    # Show the collection page again (fresh message at bottom)
+    await show_collection_page(
+        update=update,
+        context=context,
         collection_id=collection_id,
         page=page,
-        total_pages=total_pages,
-        items_in_block=items_in_block,
-        group_size=group_size,
-    )
-    
-    # Add Back to Collections button
-    keyboard_list = list(reply_markup.inline_keyboard)
-    keyboard_list.append([InlineKeyboardButton("⬅️ חזור לרשימת האוספים", callback_data="back_to_browse")])
-    reply_markup = InlineKeyboardMarkup(keyboard_list)
-    
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text=header_text,
-        reply_markup=reply_markup,
+        # Pass the old message ID even if deleted, function handles delete try safely
+        edit_message_id=query.message.message_id,
+        force_resend=True
     )
 
 
@@ -1870,8 +1993,86 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_id_file_message(update, context)
         return
 
+    # בדיקה אם נשלח מספר ID פנימי של פריט (רק אם המשתמש צופה בעמוד מידע)
+    if message.text and message.text.strip().isdigit():
+        item_id = int(message.text.strip())
+        
+        # Security: Only allow IDs that were shown on the current info page
+        allowed_ids = context.user_data.get("allowed_item_ids", [])
+        
+        if item_id in allowed_ids:
+            item = db.get_item_by_id(item_id)
+            if item:
+                # item structure: (id, collection_id, content_type, file_id, text_content, file_name, file_size, added_at)
+                _, collection_id, content_type, file_id, text_content, file_name, file_size, added_at = item
+                
+                # Double-check: verify collection matches the info page collection
+                info_collection_id = context.user_data.get("info_page_collection_id")
+                if info_collection_id and info_collection_id == collection_id:
+                    chat_id = message.chat_id
+                    caption = f"📄 פריט #{item_id}"
+                    if text_content:
+                        caption += f"\n\n{text_content}"
+                    
+                    try:
+                        # Delete the user's message first
+                        try:
+                            await context.bot.delete_message(chat_id=chat_id, message_id=message.message_id)
+                        except Exception:
+                            pass
+                        
+                        if content_type == "photo":
+                            await context.bot.send_photo(chat_id=chat_id, photo=file_id, caption=caption)
+                        elif content_type == "video":
+                            await context.bot.send_video(chat_id=chat_id, video=file_id, caption=caption)
+                        elif content_type == "document":
+                            await context.bot.send_document(chat_id=chat_id, document=file_id, caption=caption)
+                        elif content_type == "audio":
+                            await context.bot.send_audio(chat_id=chat_id, audio=file_id, caption=caption)
+                        else:
+                            await context.bot.send_message(chat_id=chat_id, text=caption)
+                        return
+                    except Exception as e:
+                        logger.error(f"Error sending item by ID: {e}")
+                        await message.reply_text("❌ שגיאה בשליחת הקובץ.")
+                        return
+        else:
+            # ID not in allowed list - show error only if user has an info page open
+            if context.user_data.get("allowed_item_ids"):
+                await message.reply_text("❌ מספר ID לא תקין.\nשלח מספר מהעמוד הנוכחי בלבד.")
+                return
+
     if user.id not in active_collections:
-        await message.reply_text("אין אוסף פעיל. השתמש ב /collections או /newcollection קודם.")
+        # Try to update main menu message if exists
+        main_menu_msg_id = context.user_data.get("main_menu_msg_id")
+        chat_id = message.chat_id
+        
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("➕ יצירת אוסף חדש", callback_data="main_menu:new_collection")],
+            [InlineKeyboardButton("📂 בחירת אוסף פעיל", callback_data="main_menu:select_collection")],
+            [InlineKeyboardButton("🏠 חזור לתפריט ראשי", callback_data="back_to_main")]
+        ])
+        
+        text = "⚠️ אין אוסף פעיל.\nבחר אוסף קיים או צור חדש:"
+        
+        if main_menu_msg_id:
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=main_menu_msg_id,
+                    text=text,
+                    reply_markup=keyboard
+                )
+                # Delete user's message
+                try:
+                    await context.bot.delete_message(chat_id=chat_id, message_id=message.message_id)
+                except Exception:
+                    pass
+                return
+            except Exception:
+                pass
+        
+        await message.reply_text(text, reply_markup=keyboard)
         return
 
     collection_id = active_collections[user.id]
@@ -2733,6 +2934,7 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_select_collection_callback, pattern=r"^select_collection:"))
     app.add_handler(CallbackQueryHandler(handle_browse_page_callback, pattern=r"^browse_page:"))
     app.add_handler(CallbackQueryHandler(handle_scroll_view_callback, pattern=r"^scroll_view:"))
+    app.add_handler(CallbackQueryHandler(handle_page_info_callback, pattern=r"^page_info:"))
     app.add_handler(
         CallbackQueryHandler(
             handle_browse_group_or_select_all_callback,
