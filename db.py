@@ -316,6 +316,12 @@ def delete_collection(collection_id: int) -> bool:
             if deleted_shares > 0:
                 logger.info(f"Deleted {deleted_shares} share record(s) for collection {collection_id}")
             
+            # Step 1.5: Delete all items in the collection
+            cur.execute("DELETE FROM items WHERE collection_id = ?", (collection_id,))
+            deleted_items = cur.rowcount
+            if deleted_items > 0:
+                logger.info(f"Deleted {deleted_items} item(s) from collection {collection_id}")
+
             # Step 3: Delete the collection itself
             cur.execute("DELETE FROM collections WHERE id = ?", (collection_id,))
             success = cur.rowcount > 0
@@ -326,6 +332,16 @@ def delete_collection(collection_id: int) -> bool:
         except Exception as e:
             logger.error(f"Error deleting collection {collection_id}: {e}")
             raise
+
+
+def delete_item(collection_id: int, file_id: str) -> bool:
+    """Delete a specific item from a collection by file_id"""
+    with db_transaction() as (conn, cur):
+        try:
+            cur.execute("DELETE FROM items WHERE collection_id = ? AND file_id = ?", (collection_id, file_id))
+            return cur.rowcount > 0
+        except Exception:
+            return False
 
 
 def get_all_collections_paginated(offset: int = 0, limit: int = 12) -> list:
