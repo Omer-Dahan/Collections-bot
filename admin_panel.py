@@ -27,6 +27,7 @@ def build_admin_main_menu():
         [InlineKeyboardButton("📦 אוספים", callback_data="admin_collections")],
         [InlineKeyboardButton("🔗 שיתופים", callback_data="admin_shares")],
         [InlineKeyboardButton("📊 סטטיסטיקות", callback_data="admin_stats")],
+        [InlineKeyboardButton("🏠 מסך הבית", callback_data="back_to_main")]
     ]
     
     return message_text, InlineKeyboardMarkup(keyboard)
@@ -385,7 +386,7 @@ async def show_shares_dashboard(query, context: ContextTypes.DEFAULT_TYPE, page:
     
     message_text = f"🔗 <b>שיתופים פעילים</b> (עמוד {page}/{total_pages})\n\n"
     
-    for idx, (share_id, share_code, collection_id, collection_name, created_by, creator_username, created_at, access_count) in enumerate(page_shares, start=start_idx + 1):
+    for idx, (share_id, share_code, collection_id, collection_name, created_by, creator_username, created_at, unique_users, total_accesses) in enumerate(page_shares, start=start_idx + 1):
         # Format date
         try:
             date_obj = datetime.fromisoformat(created_at)
@@ -407,7 +408,7 @@ async def show_shares_dashboard(query, context: ContextTypes.DEFAULT_TYPE, page:
             f"   🔑 קוד: <code>{share_code}</code>\n"
             f"   👤 יוצר: {user_link}\n"
             f"   📅 תאריך: {date_str}\n"
-            f"   👥 גישות: {access_count}\n\n"
+            f"   👥 משתמשים: {unique_users} | 👁️ צפיות: {total_accesses}\n\n"
         )
     
     # Build keyboard with pagination
@@ -448,7 +449,7 @@ async def show_share_card(query, context: ContextTypes.DEFAULT_TYPE, share_id: i
         await query.answer("שיתוף לא נמצא", show_alert=True)
         return
     
-    share_id, share_code, collection_id, collection_name, created_by, creator_username, created_at, access_count = share_info
+    share_id, share_code, collection_id, collection_name, created_by, creator_username, created_at, unique_users, total_accesses = share_info
     
     # Get detailed stats
     stats = db.get_share_stats(share_code)

@@ -4,14 +4,14 @@ import db
 from config import is_admin
 from constants import active_collections
 from utils import (
-    track_and_reset_user, get_user_keyboard, get_main_menu_text, 
+    record_activity, get_user_keyboard, get_main_menu_text, 
     build_main_menu_keyboard, send_response, show_collections_menu, 
     show_collection_page, check_collection_access, logger
 )
 
+@record_activity
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    track_and_reset_user(user, context)
 
     chat = update.effective_chat
     if not chat:
@@ -81,9 +81,9 @@ async def new_collection_flow(message, user, context, args: list[str], edit_mess
         else:
             await message.reply_text(f"שגיאה ביצירת אוסף: {e}")
 
+@record_activity
 async def new_collection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    track_and_reset_user(user, context)
 
     await new_collection_flow(update.message, user, context, context.args)
 
@@ -91,9 +91,9 @@ async def list_collections_flow(update: Update, context: ContextTypes.DEFAULT_TY
     user = update.effective_user
     await show_collections_menu(update, context, user.id, "select_collection", "בחר אוסף פעיל:", edit_message_id)
 
+@record_activity
 async def list_collections(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    track_and_reset_user(user, context)
     
     await list_collections_flow(update, context)
 
@@ -105,10 +105,10 @@ async def manage_collections_flow(update: Update, context: ContextTypes.DEFAULT_
         "בחר אוסף לניהול:", edit_message_id
     )
 
+@record_activity
 async def manage_collections(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ניהול אוספים - ייצוא ומחיקה"""
     user = update.effective_user
-    track_and_reset_user(user, context)
     
     await manage_collections_flow(update.message, user, context)
 
@@ -146,10 +146,10 @@ async def show_browse_menu(chat_id: int, user_id: int, context: ContextTypes.DEF
     temp_update = type('obj', (object,), {'effective_chat': type('obj', (object,), {'id': chat_id})()})()
     await send_response(temp_update, context, text, reply_markup, edit_message_id)
 
+@record_activity
 async def browse(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """פקודת /browse - בחירת אוסף לדפדוף"""
     user = update.effective_user
-    track_and_reset_user(user, context)
 
     await show_browse_menu(
         chat_id=update.message.chat_id,
@@ -174,9 +174,9 @@ async def remove_flow(message, user, context, args: list[str], edit_message_id: 
         "🗑 בחר אוסף למחיקת פריטים:", edit_message_id
     )
 
+@record_activity
 async def remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    track_and_reset_user(user, context)
 
     await remove_flow(update.message, user, context, context.args)
 
@@ -194,16 +194,16 @@ async def id_file_flow(message, user, context, edit_message_id: int = None):
         keyboard, edit_message_id
     )
 
+@record_activity
 async def id_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    track_and_reset_user(user, context)
 
     await id_file_flow(update.message, user, context)
 
+@record_activity
 async def access_shared(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Command to access a shared collection via code"""
     user = update.effective_user
-    track_and_reset_user(user, context)
     
     # Check if code provided in args
     if context.args:

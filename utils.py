@@ -30,6 +30,112 @@ class UserActionFilter(logging.Filter):
         # Only logs from our bot packages
         return record.name == "__main__" or record.name.startswith("handlers")
 
+
+def parse_callback_data(data: str, prefix: str = None) -> list[str] | None:
+    """
+    Parses callback data string.
+    If prefix is provided, verifies it matches.
+    Returns list of parts (excluding prefix) or None if invalid.
+    """
+    if not data:
+        return None
+    
+    parts = data.split(":")
+
+    if prefix:
+        if not data.startswith(prefix):
+            return None
+        
+        # If the first part matches prefix exactly, remove it
+        if parts[0] == prefix:
+            return parts[1:]
+        
+    return parts
+
+
+async def validate_access_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, collection_id: int) -> tuple[bool, object]:
+    """
+    Wrapper for check_collection_access that handles user feedback.
+    Returns (is_allowed, collection_obj).
+    """
+    if hasattr(update, 'callback_query') and update.callback_query:
+        user_id = update.callback_query.from_user.id
+        message_func = update.callback_query.edit_message_text
+    else:
+        user_id = update.effective_user.id
+        message_func = update.effective_chat.send_message if update.effective_chat else None
+
+    is_allowed, error_msg, collection = check_collection_access(user_id, collection_id)
+    
+    if not is_allowed and message_func:
+        try:
+            await message_func(text=error_msg)
+        except Exception:
+             # Fallback if edit fails (e.g. message too old)
+             if update.effective_chat:
+                 await update.effective_chat.send_message(text=error_msg)
+    
+    return is_allowed, collection
+
+def extract_file_info(message):
+    """
+    Extracts file information (content_type, file_id, file_name, file_size, text_content) from a message.
+    Returns dict or None if no supported content found.
+    """
+    content_type = None
+    file_id = None
+    text_content = message.caption or message.text or ""
+    f_name = None
+    f_size = 0
+    
+    if message.photo:
+        content_type = "photo"
+        file_id = message.photo[-1].file_id
+        f_size = message.photo[-1].file_size
+        
+    elif message.video:
+        content_type = "video"
+        file_id = message.video.file_id
+        f_name = message.video.file_name
+        f_size = message.video.file_size
+        
+    elif message.document:
+        content_type = "document"
+        file_id = message.document.file_id
+        f_name = message.document.file_name
+        f_size = message.document.file_size
+        
+    elif message.audio:
+        content_type = "audio"
+        file_id = message.audio.file_id
+        f_name = message.audio.file_name
+        f_size = message.audio.file_size
+        
+    elif message.text:
+        content_type = "text"
+        text_content = message.text
+        
+    if not content_type:
+        return None
+        
+    return {
+        "content_type": content_type,
+        "file_id": file_id,
+        "text_content": text_content,
+        "file_name": f_name,
+        "file_size": f_size
+    }
+
+def record_activity(func):
+    """Decorator to track user activity and reset modes"""
+    import functools
+    @functools.wraps(func)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        user = update.effective_user
+        track_and_reset_user(user, context)
+        return await func(update, context, *args, **kwargs)
+    return wrapper
+
 async def send_response(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, keyboard=None, edit_message_id: int = None, parse_mode=None):
     """
     Helper function to send or edit a message.
@@ -623,18 +729,16 @@ async def show_collection_page(
     ])
     
     # Back button logic
-    # Check if admin is viewing someone else's collection
     if is_admin(user_id) and collection[2] != user_id:
-        back_data = f"admin_manage_col:{collection_id}"
-        back_text = "⬅️ חזור לניהול האוסף"
+        # Admin viewing someone else's collection -> return to management of that collection
         keyboard_list.append([
-            InlineKeyboardButton(back_text, callback_data=back_data)
+            InlineKeyboardButton("⬅️ חזור לניהול האוסף", callback_data=f"admin_manage_col:{collection_id}")
         ])
-    
-    # Row: Main Menu (Always at the bottom)
-    keyboard_list.append([
-        InlineKeyboardButton("🏠 תפריט ראשי", callback_data="back_to_main")
-    ])
+    else:
+        # Standard user or admin viewing own collection
+        keyboard_list.append([
+            InlineKeyboardButton("🏠 תפריט ראשי", callback_data="back_to_main")
+        ])
     
     reply_markup = InlineKeyboardMarkup(keyboard_list)
 

@@ -9,6 +9,7 @@ from telegram.ext import (
     filters,
     AIORateLimiter,
 )
+from telegram.request import HTTPXRequest
 from config import BOT_TOKEN
 from admin_panel import admin_panel, handle_admin_callback
 from utils import error_handler, UserActionFilter, logger
@@ -60,7 +61,8 @@ def main():
     
     logger.info("Bot starting...")
 
-    app = ApplicationBuilder().token(BOT_TOKEN).rate_limiter(AIORateLimiter()).build()
+    request = HTTPXRequest(connection_pool_size=8, read_timeout=30.0, write_timeout=30.0, connect_timeout=30.0, pool_timeout=30.0)
+    app = ApplicationBuilder().token(BOT_TOKEN).rate_limiter(AIORateLimiter()).request(request).build()
 
     # --- Error Handler ---
     app.add_error_handler(error_handler)
@@ -76,6 +78,7 @@ def main():
     app.add_handler(CommandHandler("access", access_shared))
     
     app.add_handler(CommandHandler("admin", admin_panel)) # External module
+    app.add_handler(CommandHandler("adminpanel", admin_panel))
 
     # --- Callback Handlers ---
     
@@ -109,31 +112,6 @@ def main():
     
     # Deletion & Sharing Access
     app.add_handler(CallbackQueryHandler(handle_select_item_delete_col_callback, pattern="^select_item_del_col:"))
-    app.add_handler(CallbackQueryHandler(handle_delete_select_collection_callback, pattern="^delete_collection:")) # Reuse pattern warning? No, wait.
-    # The pattern above specific to management menu vs selection menu?
-    # Actually `handle_delete_collection_callback` in management vs `handle_delete_select_collection_callback` in `remove` command.
-    # They both use `delete_collection:ID`.
-    # Telethon/Telegram PTB handles handlers in order.
-    # If I register two handlers with same pattern, first one catches it?
-    # No, usually `CallbackQueryHandler` doesn't fall through unless specifed? 
-    # Actually wait. `delete_collection:` is used in TWO places in my original code?
-    # Original code:
-    # `handle_delete_select_collection_callback` uses `delete_collection:`
-    # `handle_delete_collection_callback` (management) uses `delete_collection:`
-    # This is a collision!
-    # In original code, `handle_delete_select_collection_callback` was for SELECTING which one to delete from a list?
-    # Let's check original outline...
-    # `select_collection` calls handler `handle_select_collection_callback`.
-    # `remove` command calls `delete_collection` list.
-    # The callback for choosing from list in remove mode is `delete_collection:ID`.
-    # The callback for clicking "Delete" inside Management menu is `delete_collection:ID`.
-    # So they initiate the SAME action: confirm deletion!
-    # So we only need ONE handler for `delete_collection:`.
-    # Check my imports... I imported `handle_delete_select_collection_callback` AND `handle_delete_collection_callback`.
-    # In my new `callbacks.py`, `handle_delete_collection_callback` just calls `handle_delete_select_collection_callback`.
-    # So I only need to register one of them.
-    # I will remove double registration.
-    
     app.add_handler(CallbackQueryHandler(handle_exit_delete_mode_callback, pattern="^exit_delete_mode$"))
     app.add_handler(CallbackQueryHandler(handle_exit_shared_collection_callback, pattern="^exit_shared_collection$"))
     app.add_handler(CallbackQueryHandler(handle_cancel_share_access_callback, pattern="^cancel_share_access$"))
@@ -141,7 +119,6 @@ def main():
     # External Admin Handlers
     app.add_handler(CallbackQueryHandler(handle_admin_callback, pattern="^(admin_|user_stats|system_stats|broadcast|backup_db)"))
 
-    # --- Message Handlers ---
     # Everything else (Text, Photo, Video, Document, etc.)
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
 

@@ -11,7 +11,8 @@ from utils import (
     build_page_file_type_menu, logger, prepare_media_groups, 
     send_media_groups_in_chunks, verify_user_code,
     create_verification_code, update_batch_status, format_size,
-    get_main_menu_text, build_main_menu_keyboard
+    get_main_menu_text, build_main_menu_keyboard,
+    parse_callback_data, validate_access_wrapper
 )
 from handlers.commands import (
     new_collection_flow, list_collections_flow, manage_collections_flow, 
@@ -25,15 +26,14 @@ async def handle_select_collection_callback(update: Update, context: ContextType
 
     user = query.from_user
     data = query.data  # format: select_collection:<id>
-    if not data.startswith("select_collection:"):
+    parts = parse_callback_data(data, "select_collection")
+    if not parts:
         return
 
-    _, col_id_str = data.split(":")
-    collection_id = int(col_id_str)
+    collection_id = int(parts[0])
 
-    is_allowed, error_msg, collection = check_collection_access(user.id, collection_id)
+    is_allowed, collection = await validate_access_wrapper(update, context, collection_id)
     if not is_allowed:
-        await query.edit_message_text(error_msg)
         return
 
     active_collections[user.id] = collection_id
@@ -58,18 +58,17 @@ async def handle_select_item_delete_col_callback(update: Update, context: Contex
 
     user = query.from_user
     data = query.data  # format: select_item_del_col:<id>
-    if not data.startswith("select_item_del_col:"):
+    parts = parse_callback_data(data, "select_item_del_col")
+    if not parts:
         return
 
     try:
-        _, col_id_str = data.split(":")
-        collection_id = int(col_id_str)
+        collection_id = int(parts[0])
     except ValueError:
         return
 
-    is_allowed, error_msg, collection = check_collection_access(user.id, collection_id)
+    is_allowed, collection = await validate_access_wrapper(update, context, collection_id)
     if not is_allowed:
-        await query.edit_message_text(error_msg)
         return
 
     # Activate Item Deletion Mode
@@ -95,12 +94,12 @@ async def handle_browse_page_callback(update: Update, context: ContextTypes.DEFA
 
     user = query.from_user
     data = query.data  # format: browse_page:<collection_id>:<page>
-    if not data.startswith("browse_page:"):
+    parts = parse_callback_data(data, "browse_page")
+    if not parts:
         return
 
-    _, col_id_str, page_str = data.split(":")
-    collection_id = int(col_id_str)
-    page = int(page_str)
+    collection_id = int(parts[0])
+    page = int(parts[1])
 
     # Use centralized function
     await show_collection_page(
@@ -119,19 +118,18 @@ async def handle_scroll_view_callback(update: Update, context: ContextTypes.DEFA
     user = query.from_user
     data = query.data  # format: scroll_view:<collection_id>:<item_index>
     
-    if not data.startswith("scroll_view:"):
+    parts = parse_callback_data(data, "scroll_view")
+    if not parts:
         return
 
     try:
-        _, col_id_str, index_str = data.split(":")
-        collection_id = int(col_id_str)
-        item_index = int(index_str)
+        collection_id = int(parts[0])
+        item_index = int(parts[1])
     except ValueError:
         return
 
-    is_allowed, error_msg, collection = check_collection_access(user.id, collection_id)
+    is_allowed, collection = await validate_access_wrapper(update, context, collection_id)
     if not is_allowed:
-        await query.edit_message_text(error_msg)
         return
 
     # Get total items count
@@ -236,20 +234,19 @@ async def handle_page_info_callback(update: Update, context: ContextTypes.DEFAUL
     user = query.from_user
     data = query.data  # format: page_info:<collection_id>:<page>:<info_page>
     
-    if not data.startswith("page_info:"):
+    parts = parse_callback_data(data, "page_info")
+    if not parts:
         return
 
     try:
-        _, col_id_str, page_str, info_page_str = data.split(":")
-        collection_id = int(col_id_str)
-        page = int(page_str)
-        info_page = int(info_page_str)
+        collection_id = int(parts[0])
+        page = int(parts[1])
+        info_page = int(parts[2])
     except ValueError:
         return
 
-    is_allowed, error_msg, collection = check_collection_access(user.id, collection_id)
+    is_allowed, collection = await validate_access_wrapper(update, context, collection_id)
     if not is_allowed:
-        await query.edit_message_text(error_msg)
         return
 
     block_size = 100
@@ -324,7 +321,11 @@ async def handle_page_info_callback(update: Update, context: ContextTypes.DEFAUL
     if nav_buttons:
         keyboard.append(nav_buttons)
     keyboard.append([InlineKeyboardButton("🔙 חזור לתפריט דפדוף", callback_data=f"browse_page:{collection_id}:{page}")])
-    keyboard.append([InlineKeyboardButton("🏠 חזור לתפריט ראשי", callback_data="back_to_main")])
+    
+    if is_admin(user.id) and collection[2] != user.id:
+         keyboard.append([InlineKeyboardButton("⬅️ חזור לניהול האוסף", callback_data=f"admin_manage_col:{collection_id}")])
+    else:
+         keyboard.append([InlineKeyboardButton("🏠 חזור לתפריט ראשי", callback_data="back_to_main")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -372,22 +373,21 @@ async def handle_browse_group_or_select_all_callback(update: Update, context: Co
     
     # Detect type
     if data.startswith("browse_group:"):
-        _, col_id_str, page_str, idx_str = data.split(":")
-        collection_id = int(col_id_str)
-        page = int(page_str)
-        idx = int(idx_str)
+        parts = parse_callback_data(data, "browse_group")
+        collection_id = int(parts[0])
+        page = int(parts[1])
+        idx = int(parts[2])
     elif data.startswith("browse_page_select_all:"):
         is_select_all = True
-        _, col_id_str, page_str = data.split(":")
-        collection_id = int(col_id_str)
-        page = int(page_str)
+        parts = parse_callback_data(data, "browse_page_select_all")
+        collection_id = int(parts[0])
+        page = int(parts[1])
     else:
         return
 
     # Permissions
-    is_allowed, error_msg, collection = check_collection_access(user_id, collection_id)
+    is_allowed, collection = await validate_access_wrapper(update, context, collection_id)
     if not is_allowed:
-        await query.edit_message_text(error_msg)
         return
 
     if is_select_all:
@@ -406,11 +406,6 @@ async def handle_browse_group_or_select_all_callback(update: Update, context: Co
 
     # Show options keyboard (Send Videos, Send Images, Send Files, Send All Main)
     # We call db to check counts to show nice numbers on buttons
-    # Note: This checks counts for the WHOLE PAGE for select_all, or specific group
-    
-    # For simplicity, we just pass the range/page params to the next menu.
-    # The build_page_file_type_menu logic might need adjustment if we want specific counts.
-    # Currently it seems built for page-level, but we can reuse or adapt.
     
     # Let's count totals for this scope to show on buttons
     block_size = 100
@@ -484,12 +479,16 @@ async def handle_page_file_send_choice_callback(update: Update, context: Context
     user_id = query.from_user.id
     
     # data format: page_files_<type>:<collection_id>:<page>
-    # types: videos, images, document, queue_all
+    parts = parse_callback_data(data)
+    if not parts or len(parts) < 3:
+        return
+        
+    action = parts[0]
     
     try:
-        action, col_id_str, page_str = data.split(":")
-        collection_id = int(col_id_str)
-        page = int(page_str)
+        # The caller sends ONE string.
+        collection_id = int(parts[1])
+        page = int(parts[2])
     except ValueError:
         return
 
@@ -562,12 +561,12 @@ async def handle_batch_status_callback(update: Update, context: ContextTypes.DEF
     query = update.callback_query
     data = query.data  # batch_status:<collection_id>
     
-    if not data.startswith("batch_status:"):
+    parts = parse_callback_data(data, "batch_status")
+    if not parts:
         return
         
     try:
-        _, col_id_str = data.split(":")
-        collection_id = int(col_id_str)
+        collection_id = int(parts[0])
         
         user_data = context.user_data
         count = 0
@@ -585,19 +584,18 @@ async def handle_collection_send_all_callback(update: Update, context: ContextTy
     await query.answer()
     
     data = query.data  # collection_send_all:<collection_id>
-    if not data.startswith("collection_send_all:"):
+    parts = parse_callback_data(data, "collection_send_all")
+    if not parts:
         return
         
     try:
-        _, col_id_str = data.split(":")
-        collection_id = int(col_id_str)
+        collection_id = int(parts[0])
     except ValueError:
         return
         
     user = query.from_user
-    is_allowed, error_msg, collection = check_collection_access(user.id, collection_id)
+    is_allowed, collection = await validate_access_wrapper(update, context, collection_id)
     if not is_allowed:
-        await query.edit_message_text(error_msg)
         return
         
     total_items = db.count_items_in_collection(collection_id)
@@ -667,17 +665,18 @@ async def handle_delete_select_collection_callback(update: Update, context: Cont
     data = query.data
     # format: delete_collection:<id>
     
+    parts = parse_callback_data(data, "delete_collection")
+    if not parts:
+        return
+
     try:
-        _, col_id_str = data.split(":")
-        collection_id = int(col_id_str)
+        collection_id = int(parts[0])
     except ValueError:
         return
         
     user_id = query.from_user.id
-    is_allowed, error_msg, collection = check_collection_access(user_id, collection_id)
-    
+    is_allowed, collection = await validate_access_wrapper(update, context, collection_id)
     if not is_allowed:
-        await query.edit_message_text(error_msg)
         return
         
     # Generate verification code
@@ -774,15 +773,17 @@ async def handle_manage_collection_callback(update: Update, context: ContextType
     data = query.data
     # manage_collection:<id>
     
+    parts = parse_callback_data(data, "manage_collection")
+    if not parts:
+        return
+    
     try:
-        _, col_id_str = data.split(":")
-        collection_id = int(col_id_str)
+        collection_id = int(parts[0])
     except ValueError:
         return
         
-    is_allowed, error_msg, collection = check_collection_access(query.from_user.id, collection_id)
+    is_allowed, collection = await validate_access_wrapper(update, context, collection_id)
     if not is_allowed:
-        await query.edit_message_text(error_msg)
         return
 
     # Check if admin is viewing
@@ -818,13 +819,16 @@ async def handle_share_collection_callback(update: Update, context: ContextTypes
     await query.answer()
     user = query.from_user
     
+    parts = parse_callback_data(query.data, "share_collection")
+    if not parts:
+        return
+
     try:
-        _, col_id_str = query.data.split(":")
-        collection_id = int(col_id_str)
+        collection_id = int(parts[0])
     except ValueError:
         return
 
-    is_allowed, error_msg, collection = check_collection_access(query.from_user.id, collection_id)
+    is_allowed, collection = await validate_access_wrapper(update, context, collection_id)
     if not is_allowed:
         return
         
@@ -864,14 +868,17 @@ async def handle_share_stats_callback(update: Update, context: ContextTypes.DEFA
     query = update.callback_query
     await query.answer()
     
+    parts = parse_callback_data(query.data, "share_stats")
+    if not parts:
+        return
+
     try:
-        _, col_id_str = query.data.split(":")
-        collection_id = int(col_id_str)
+        collection_id = int(parts[0])
     except ValueError:
         return
 
     # Check ownership
-    is_allowed, _, _ = check_collection_access(query.from_user.id, collection_id)
+    is_allowed, collection = await validate_access_wrapper(update, context, collection_id)
     if not is_allowed:
         return
         
@@ -905,9 +912,12 @@ async def handle_regenerate_share_callback(update: Update, context: ContextTypes
     query = update.callback_query
     await query.answer("קוד שיתוף הוחלף")
     
+    parts = parse_callback_data(query.data, "regenerate_share")
+    if not parts:
+        return
+
     try:
-        _, col_id_str = query.data.split(":")
-        collection_id = int(col_id_str)
+        collection_id = int(parts[0])
     except ValueError:
         return
         
@@ -930,9 +940,12 @@ async def handle_revoke_share_callback(update: Update, context: ContextTypes.DEF
     query = update.callback_query
     await query.answer("שיתוף בוטל")
     
+    parts = parse_callback_data(query.data, "revoke_share")
+    if not parts:
+        return
+
     try:
-        _, col_id_str = query.data.split(":")
-        collection_id = int(col_id_str)
+        collection_id = int(parts[0])
     except ValueError:
         return
         
@@ -949,9 +962,12 @@ async def handle_export_collection_callback(update: Update, context: ContextType
     query = update.callback_query
     await query.answer("מכין קובץ גיבוי...")
     
+    parts = parse_callback_data(query.data, "export_collection")
+    if not parts:
+        return
+
     try:
-        _, col_id_str = query.data.split(":")
-        collection_id = int(col_id_str)
+        collection_id = int(parts[0])
     except ValueError:
         return
         
@@ -961,7 +977,7 @@ async def handle_export_collection_callback(update: Update, context: ContextType
         await query.edit_message_text("האוסף ריק, אין מה לייצא.")
         return
         
-    is_allowed, _, collection = check_collection_access(query.from_user.id, collection_id)
+    is_allowed, collection = await validate_access_wrapper(update, context, collection_id)
     if not is_allowed:
         return
         
