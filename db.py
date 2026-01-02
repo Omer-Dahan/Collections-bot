@@ -131,11 +131,24 @@ def init_db():
     )
     """)
     
+    # Archive tracking table - stores where items were archived
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS archive_info (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        item_id INTEGER NOT NULL,
+        archive_channel_id INTEGER NOT NULL,
+        archive_message_id INTEGER NOT NULL,
+        archived_at TEXT NOT NULL,
+        FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+    )
+    """)
+    
     # Add indices for better performance
     cur.execute("CREATE INDEX IF NOT EXISTS idx_items_collection ON items(collection_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_items_file_id ON items(file_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_collections_user ON collections(user_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_shared_collections_code ON shared_collections(share_code)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_archive_info_item ON archive_info(item_id)")
     
     conn.commit()
     conn.close()
@@ -786,3 +799,32 @@ def get_share_by_collection(collection_id: int) -> tuple | None:
         """, (collection_id,))
         return cur.fetchone()
 
+
+# --- Archive Info Functions ---
+
+def save_archive_info(item_id: int, archive_channel_id: int, archive_message_id: int) -> int:
+    """
+    Save archive info for an item.
+    Returns the inserted row id.
+    """
+    with db_transaction() as (conn, cur):
+        archived_at = datetime.now().isoformat()
+        cur.execute("""
+            INSERT INTO archive_info (item_id, archive_channel_id, archive_message_id, archived_at)
+            VALUES (?, ?, ?, ?)
+        """, (item_id, archive_channel_id, archive_message_id, archived_at))
+        return cur.lastrowid
+
+
+def get_archive_info(item_id: int) -> list:
+    """
+    Get archive info for an item.
+    Returns list of (archive_channel_id, archive_message_id, archived_at) tuples.
+    """
+    with db_transaction(commit=False) as (conn, cur):
+        cur.execute("""
+            SELECT archive_channel_id, archive_message_id, archived_at
+            FROM archive_info
+            WHERE item_id = ?
+        """, (item_id,))
+        return cur.fetchall()

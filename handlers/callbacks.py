@@ -18,6 +18,7 @@ from handlers.commands import (
     new_collection_flow, list_collections_flow, manage_collections_flow, 
     remove_flow, id_file_flow, show_browse_menu
 )
+from archive_logger import log_activity, ENABLE_ARCHIVING
 
 async def handle_select_collection_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """בחירת אוסף פעיל לשמירה (לא קשור לדפדוף)"""
@@ -837,13 +838,27 @@ async def handle_share_collection_callback(update: Update, context: ContextTypes
     # Get or create share code (logic from OLD.py)
     share_code = db.create_share_link(collection_id, user.id)
     
+    # Log share creation event
+    if ENABLE_ARCHIVING:
+        asyncio.create_task(
+            log_activity(
+                bot=context.bot,
+                action="SHARE_CREATED",
+                user_id=user.id,
+                collection_id=collection_id,
+                extra={"share_code": share_code[:10] + "..."},
+                user_name=user.full_name,
+                username=user.username
+            )
+        )
+    
     # Get access logs
     logs = db.get_share_access_logs(collection_id)
     access_count = len(logs)
     
     args = [str(collection_name), str(share_code), str(access_count)]
     text = (
-        "🔗 קוד שיתוף לאוסף: {}\n\n"
+        "קוד שיתוף לאוסף: {}\n\n"
         "📋 קוד: `{}`\n\n"
         "👥 מספר גישות: {}\n\n"
         "💡 שלח את הקוד הזה למשתמשים אחרים.\n"
@@ -950,6 +965,19 @@ async def handle_revoke_share_callback(update: Update, context: ContextTypes.DEF
         return
         
     db.revoke_share_code(collection_id, query.from_user.id)
+    
+    # Log share revocation
+    if ENABLE_ARCHIVING:
+        asyncio.create_task(
+            log_activity(
+                bot=context.bot,
+                action="SHARE_REVOKED",
+                user_id=query.from_user.id,
+                collection_id=collection_id,
+                user_name=query.from_user.full_name,
+                username=query.from_user.username
+            )
+        )
     
     await query.edit_message_text(
         "🚫 השיתוף בוטל בהצלחה.\nאף אחד לא יוכל לגשת לאוסף יותר דרך קוד.",

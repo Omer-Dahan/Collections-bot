@@ -61,7 +61,7 @@ def main():
     
     logger.info("Bot starting...")
 
-    request = HTTPXRequest(connection_pool_size=8, read_timeout=30.0, write_timeout=30.0, connect_timeout=30.0, pool_timeout=30.0)
+    request = HTTPXRequest(connection_pool_size=8, read_timeout=60.0, write_timeout=60.0, connect_timeout=60.0, pool_timeout=60.0)
     app = ApplicationBuilder().token(BOT_TOKEN).rate_limiter(AIORateLimiter()).request(request).build()
 
     # --- Error Handler ---

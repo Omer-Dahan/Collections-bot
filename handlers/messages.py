@@ -1,17 +1,25 @@
+import asyncio
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 import db
 from config import is_admin
 from constants import active_collections, active_shared_collections, MSG_NO_COLLECTIONS
 from utils import (
-    track_and_reset_user, verify_user_code, update_batch_status, # set_user_mode is implicit via direct context
+    track_and_reset_user, verify_user_code, update_batch_status,
     send_response, show_collection_page, format_size, logger,
     check_collection_access, prepare_media_groups, send_media_groups_in_chunks,
     extract_file_info
 )
+from archive_logger import (
+    archive_file_to_channels, log_activity, ENABLE_ARCHIVING
+)
 
 async def handle_new_collection_name_input(message, context: ContextTypes.DEFAULT_TYPE):
     """Handle text input for new collection name"""
+    if not message.text:
+        await message.reply_text("נא לשלוח שם אוסף כטקסט:")
+        return
+
     name = message.text.strip()
     user = message.from_user
     
@@ -299,6 +307,19 @@ async def activate_shared_collection(update: Update, context: ContextTypes.DEFAU
     active_shared_collections[user.id] = share_code
     db.log_share_access(collection_id, user.id)
     
+    # Log share access event
+    if ENABLE_ARCHIVING:
+        asyncio.create_task(
+            log_activity(
+                bot=context.bot,
+                action="SHARE_ACCESSED",
+                user_id=user.id,
+                collection_id=collection_id,
+                user_name=user.full_name,
+                username=user.username
+            )
+        )
+    
     # Clear waiting mode
     if "waiting_for_share_code" in context.user_data:
         del context.user_data["waiting_for_share_code"]
@@ -477,18 +498,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Add to DB
     try:
-        db.add_item(
+        item_id = db.add_item(
             collection_id, content_type, file_id, text_content, f_name, f_size
         )
         # Verify collection name available
         col_data = db.get_collection_by_id(collection_id)
         col_name = col_data[1] if col_data else "Unknown"
         
-        # Trigger batch notification
+        # Archive to channels (async, non-blocking)
+        if ENABLE_ARCHIVING:
+            asyncio.create_task(
+                archive_file_to_channels(
+                    bot=context.bot,
+                    item_id=item_id,
+                    file_id=file_id,
+                    content_type=content_type,
+                    user_id=user.id,
+                    collection_id=collection_id,
+                    collection_name=col_name,
+                    file_name=f_name,
+                    original_caption=text_content,
+                    user_name=user.full_name,
+                    username=user.username
+                )
+            )
+
+
         await update_batch_status(message, context, col_name)
-        
-        # Try to delete user message to keep chat clean (optional, user preference)
-        # await message.delete() 
         
     except Exception as e:
         logger.error(f"Error adding item: {e}")

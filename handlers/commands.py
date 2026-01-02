@@ -17,6 +17,71 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not chat:
         return
     
+    # Handle Deep Link Payload (view_{item_id})
+    if context.args and context.args[0].startswith("view_"):
+        try:
+            payload = context.args[0]
+            item_id = int(payload.split("_")[1])
+            
+            # Security Check: Only admins
+            if not is_admin(user.id):
+                await update.message.reply_text("⛔ אין לך הרשאה לצפות בקובץ זה.")
+                return
+
+            # Fetch Item
+            item = db.get_item_by_id(item_id)
+            if not item:
+                await update.message.reply_text("❌ הקובץ חיפשת לא נמצא במאגר.")
+                return
+
+            # item structure: (id, collection_id, content_type, file_id, text_content, file_name, ...
+            content_type = item[2]
+            file_id = item[3]
+            text_content = item[4]
+            file_name = item[5]
+
+            status_msg = await update.message.reply_text("⏳ מביא את הקובץ...")
+            
+            # Import here to avoid potential circular imports
+            from archive_logger import safe_copy_file_to_channel
+            
+            if content_type == "text":
+                await safe_copy_file_to_channel(
+                    bot=context.bot,
+                    channel_id=chat.id,
+                    file_id=None,
+                    content_type="text",
+                    caption=f"📝 *תוכן פריט {item_id}:*\n\n{text_content}"
+                )
+            else:
+                caption = f"📦 *פריט {item_id}*"
+                if text_content:
+                    caption += f"\n\n{text_content}"
+                    
+                await safe_copy_file_to_channel(
+                    bot=context.bot,
+                    channel_id=chat.id,
+                    file_id=file_id,
+                    content_type=content_type,
+                    caption=caption,
+                    file_name=file_name
+                )
+            
+            try:
+                await status_msg.delete()
+            except:
+                pass
+                
+            return
+
+        except (IndexError, ValueError):
+            await update.message.reply_text("❌ קישור לא תקין.")
+            return
+        except Exception as e:
+            logger.error(f"Error handling deep link: {e}")
+            await update.message.reply_text("❌ שגיאה בטעינת הקובץ.")
+            return
+
     logger.info("Saved item from user_id=%s username=%s", user.id, user.username)
 
     # Update the reply keyboard to show only /start
