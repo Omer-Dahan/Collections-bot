@@ -7,8 +7,7 @@ from constants import active_collections, active_shared_collections, MSG_NO_COLL
 from utils import (
     track_and_reset_user, verify_user_code, update_batch_status,
     send_response, show_collection_page, format_size, logger,
-    check_collection_access, prepare_media_groups, send_media_groups_in_chunks,
-    extract_file_info
+    check_collection_access, extract_file_info
 )
 from archive_logger import (
     archive_file_to_channels, log_activity, ENABLE_ARCHIVING
@@ -48,8 +47,6 @@ async def handle_new_collection_name_input(message, context: ContextTypes.DEFAUL
 
     except Exception as e:
         logger.error(f"Error creating collection: {e}")
-        if "UNIQUE constraint failed" in str(e):
-             # Ask for retry
              context.user_data["temp_collection_name"] = name 
              keyboard = InlineKeyboardMarkup([
                  [InlineKeyboardButton("♻️ נסה שם אחר", callback_data="retry_create_collection")],
@@ -346,10 +343,7 @@ async def handle_id_file_message(update: Update, context: ContextTypes.DEFAULT_T
     file_id = file_info["file_id"] if file_info else None
         
     if not file_id:
-         # Check if it is a text message with an ID we need to send
-         # This part was requested to be added to support sending files by ID
-         pass
-         return
+        return
 
     # Reply with code
     await message.reply_text(
@@ -419,7 +413,52 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await handle_share_code_input(update, context):
         return
 
-    # 2. Check for Mode Flags
+    # 2. Check if user sent a number (Requesting file by ID from info page)
+    # This must come BEFORE mode flags to avoid treating IDs as collection names
+    if message.text and message.text.isdigit():
+        target_id = int(message.text)
+        allowed_ids = context.user_data.get("allowed_item_ids", [])
+        info_col_id = context.user_data.get("info_page_collection_id")
+        
+        if info_col_id and target_id in allowed_ids:
+             # Fetch item by ID
+             try:
+                 if hasattr(db, 'get_item_by_id'):
+                    item = db.get_item_by_id(target_id)
+                    if item:
+                        # Send file with "back to info list" button
+                        page = context.user_data.get("info_page_page", 1)
+                        info_page = context.user_data.get("info_page_info_page", 0)
+                        
+                        back_button = InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🔙 חזור לרשימת מידע", callback_data=f"back_to_info:{info_col_id}:{page}:{info_page}")]
+                        ])
+                        
+                        # Send the file
+                        content_type = item[2]  # content_type is at index 2
+                        file_id = item[3]  # file_id is at index 3
+                        
+                        if content_type == "photo":
+                            await context.bot.send_photo(chat_id=message.chat_id, photo=file_id, reply_markup=back_button)
+                        elif content_type == "video":
+                            await context.bot.send_video(chat_id=message.chat_id, video=file_id, reply_markup=back_button)
+                        elif content_type == "document":
+                            await context.bot.send_document(chat_id=message.chat_id, document=file_id, reply_markup=back_button)
+                        elif content_type == "audio":
+                            await context.bot.send_audio(chat_id=message.chat_id, audio=file_id, reply_markup=back_button)
+                        else:
+                            # Fallback for text or unknown
+                            text_content = item[4] if item[4] else "תוכן לא זמין"
+                            await context.bot.send_message(chat_id=message.chat_id, text=text_content, reply_markup=back_button)
+                        return
+                 else:
+                    await message.reply_text("מצטער, הפונקציה לשליפה לפי ID חסרה בבסיס הנתונים כרגע.")
+                    return
+             except Exception as e:
+                 logger.error(f"Failed to fetch item by ID: {e}")
+                 return
+
+    # 3. Check for Mode Flags
     if context.user_data.get("creating_collection_mode"):
         await handle_new_collection_name_input(message, context)
         return
@@ -436,37 +475,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await process_imported_collection(message, context)
         return
 
-    # 3. Handle Collection Item Addition (Default behavior)
+    # 4. Handle Collection Item Addition (Default behavior)
     # Check if user has active collection
     collection_id = active_collections.get(user.id)
     
-    # Check if user sent a number (Requesting file by ID from info page)
-    if message.text and message.text.isdigit():
-        target_id = int(message.text)
-        allowed_ids = context.user_data.get("allowed_item_ids", [])
-        info_col_id = context.user_data.get("info_page_collection_id")
-        
-        if info_col_id and target_id in allowed_ids:
-             # Fetch item by ID
-             try:
-                 if hasattr(db, 'get_item_by_id'):
-                    item = db.get_item_by_id(target_id)
-                    if item:
-                        # item has 8 elements (includes collection_id at index 1), prepare_media_groups expects 7
-                        # Convert: (id, col_id, type, ...) -> (id, type, ...)
-                        item_for_utils = (item[0],) + item[2:]
-                        
-                        # Send it
-                        media_visual, media_docs, text_items = prepare_media_groups([item_for_utils])
-                        await send_media_groups_in_chunks(context.bot, message.chat_id, media_visual, media_docs, text_items)
-                        return
-                 else:
-                    await message.reply_text("מצטער, הפונקציה לשליפה לפי ID חסרה בבסיס הנתונים כרגע.")
-                    return
-             except Exception as e:
-                 logger.error(f"Failed to fetch item by ID: {e}")
-                 return
-
     if not collection_id:
         # No active collection
         keyboard = InlineKeyboardMarkup([

@@ -12,7 +12,7 @@ from utils import (
     send_media_groups_in_chunks, verify_user_code,
     create_verification_code, update_batch_status, format_size,
     get_main_menu_text, build_main_menu_keyboard,
-    parse_callback_data, validate_access_wrapper
+    parse_callback_data, validate_access_wrapper, send_info_page
 )
 from handlers.commands import (
     new_collection_flow, list_collections_flow, manage_collections_flow, 
@@ -250,116 +250,61 @@ async def handle_page_info_callback(update: Update, context: ContextTypes.DEFAUL
     if not is_allowed:
         return
 
-    block_size = 100
-    info_group_size = 10
+    # Edit the message with info page content
+    await send_info_page(
+        bot=context.bot,
+        chat_id=query.message.chat_id,
+        user_id=user.id,
+        context=context,
+        collection_id=collection_id,
+        page=page,
+        info_page=info_page,
+        edit_message_id=query.message.message_id
+    )
 
-    # Get items for current page block
-    offset_block = (page - 1) * block_size
-    items_block = db.get_items_by_collection(collection_id, offset=offset_block, limit=block_size)
+async def handle_back_to_info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """חזרה לרשימת המידע - מוחק את הודעת המידע הישנה ושולח רשימה חדשה"""
+    query = update.callback_query
+    await query.answer()
+
+    user = query.from_user
+    data = query.data  # format: back_to_info:<collection_id>:<page>:<info_page>
     
-    if not items_block:
-        await query.edit_message_text("אין פריטים בעמוד זה.")
+    parts = parse_callback_data(data, "back_to_info")
+    if not parts:
         return
 
-    # Calculate info page bounds
-    info_start = info_page * info_group_size
-    info_end = info_start + info_group_size
-    items_to_show = items_block[info_start:info_end]
-    
-    if not items_to_show:
-        # Reset to first info page if out of bounds
-        info_page = 0
-        info_start = 0
-        info_end = info_group_size
-        items_to_show = items_block[info_start:info_end]
-
-    total_info_pages = math.ceil(len(items_block) / info_group_size)
-    
-    # Build info text
-    content_type_map = {
-        "video": "🎬 וידאו",
-        "photo": "🖼 תמונה", 
-        "document": "📄 קובץ",
-        "audio": "🎵 אודיו",
-        "text": "📝 טקסט"
-    }
-    
-    def escape_html(text):
-        """Escape HTML special characters"""
-        if not text:
-            return text
-        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    
-    info_text = f"📋 <b>מידע על קבצים - עמוד {page}</b>\n"
-    info_text += f"מציג {info_start + 1}-{min(info_end, len(items_block))} מתוך {len(items_block)}\n\n"
-    
-    for item in items_to_show:
-        item_id, content_type, file_id, text_content, file_name, file_size, added_at = item
-        
-        type_display = content_type_map.get(content_type, "📁 קובץ")
-        # Escape HTML special characters
-        name_display = escape_html(file_name) if file_name else "(ללא שם קובץ)"
-        
-        info_text += f"סוג: {type_display}\n"
-        info_text += f"שם: {name_display}\n"
-        info_text += f"ID: <code>{item_id}</code>\n"
-        info_text += "─────────────────\n"
-    
-    # Store allowed IDs for this user (security - only allow IDs shown on current page)
-    context.user_data["allowed_item_ids"] = [item[0] for item in items_to_show]
-    context.user_data["info_page_collection_id"] = collection_id
-    
-    info_text += f"\n💡 <i>שלח את מספר ה-ID כדי לקבל את הקובץ</i>"
-    
-    # Build navigation keyboard
-    nav_buttons = []
-    if info_page > 0:
-        nav_buttons.append(InlineKeyboardButton("⬅️ הקודם", callback_data=f"page_info:{collection_id}:{page}:{info_page - 1}"))
-    if info_page < total_info_pages - 1:
-        nav_buttons.append(InlineKeyboardButton("הבא ➡️", callback_data=f"page_info:{collection_id}:{page}:{info_page + 1}"))
-    
-    keyboard = []
-    if nav_buttons:
-        keyboard.append(nav_buttons)
-    keyboard.append([InlineKeyboardButton("🔙 חזור לתפריט דפדוף", callback_data=f"browse_page:{collection_id}:{page}")])
-    
-    if is_admin(user.id) and collection[2] != user.id:
-         keyboard.append([InlineKeyboardButton("⬅️ חזור לניהול האוסף", callback_data=f"admin_manage_col:{collection_id}")])
-    else:
-         keyboard.append([InlineKeyboardButton("🏠 חזור לתפריט ראשי", callback_data="back_to_main")])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
     try:
-        await query.edit_message_text(
-            text=info_text,
-            reply_markup=reply_markup,
-            parse_mode="HTML"
-        )
-    except Exception as e:
-        logger.warning(f"Failed to send with HTML, trying plain text: {e}")
-        # Fallback: remove HTML tags and try without parse_mode
-        plain_text = info_text.replace("<b>", "").replace("</b>", "")
-        plain_text = plain_text.replace("<code>", "").replace("</code>", "")
-        plain_text = plain_text.replace("<i>", "").replace("</i>", "")
-        plain_text = plain_text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
-        
+        collection_id = int(parts[0])
+        page = int(parts[1])
+        info_page = int(parts[2])
+    except ValueError:
+        return
+
+    is_allowed, collection = await validate_access_wrapper(update, context, collection_id)
+    if not is_allowed:
+        return
+
+    chat_id = query.message.chat_id
+    
+    # Delete the OLD info message (stored in user_data), not the file message
+    old_info_msg_id = context.user_data.get("info_message_id")
+    if old_info_msg_id:
         try:
-            await query.edit_message_text(
-                text=plain_text,
-                reply_markup=reply_markup
-            )
+            await context.bot.delete_message(chat_id=chat_id, message_id=old_info_msg_id)
         except Exception:
-            chat_id = query.message.chat_id
-            try:
-                await context.bot.delete_message(chat_id=chat_id, message_id=query.message.message_id)
-            except Exception:
-                pass
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=plain_text,
-                reply_markup=reply_markup
-            )
+            pass
+    
+    # Send fresh info page
+    await send_info_page(
+        bot=context.bot,
+        chat_id=chat_id,
+        user_id=user.id,
+        context=context,
+        collection_id=collection_id,
+        page=page,
+        info_page=info_page
+    )
 
 async def handle_browse_group_or_select_all_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """כפתורי המספרים (קבוצות) ו'בחר הכל' בעמוד דפדוף"""
@@ -643,11 +588,6 @@ async def handle_stop_collect_callback(update: Update, context: ContextTypes.DEF
     if user_id in active_collections:
         del active_collections[user_id]
     
-    # Clear batch status
-    if "batch_status" in context.user_data:
-        # Clean specific user collection status would be better but simple clear is ok
-        pass
-
     try:
         await query.edit_message_text(
             "🛑 מצב איסוף נעצר.\nתוכל לחזור ולהוסיף קבצים דרך התפריט הראשי.",
@@ -736,8 +676,6 @@ async def handle_main_menu_button(update: Update, context: ContextTypes.DEFAULT_
         await id_file_flow(query.message, query.from_user, context, edit_message_id=query.message.message_id)
 
     elif action == "enter_code":
-        # Reset modes before entering
-        from utils import reset_user_modes
         reset_user_modes(context)
         await access_shared_flow(query.message, query.from_user, context, args=[], edit_message_id=query.message.message_id)
     

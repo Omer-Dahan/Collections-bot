@@ -14,12 +14,12 @@ from config import BOT_TOKEN
 from admin_panel import admin_panel, handle_admin_callback
 from utils import error_handler, UserActionFilter, logger
 
-# Import all handlers from our new package
 from handlers import (
     start, new_collection, list_collections, manage_collections, browse, 
     remove, id_file, access_shared,
     handle_select_collection_callback, handle_browse_page_callback,
     handle_scroll_view_callback, handle_page_info_callback,
+    handle_back_to_info_callback,
     handle_browse_group_or_select_all_callback, handle_page_file_send_choice_callback,
     handle_batch_status_callback, handle_collection_send_all_callback,
     handle_stop_collect_callback, handle_delete_select_collection_callback,
@@ -95,6 +95,7 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_browse_page_callback, pattern="^browse_page:"))
     app.add_handler(CallbackQueryHandler(handle_scroll_view_callback, pattern="^scroll_view:"))
     app.add_handler(CallbackQueryHandler(handle_page_info_callback, pattern="^page_info:"))
+    app.add_handler(CallbackQueryHandler(handle_back_to_info_callback, pattern="^back_to_info:"))
     app.add_handler(CallbackQueryHandler(handle_browse_group_or_select_all_callback, pattern="^(browse_group|browse_page_select_all):"))
     app.add_handler(CallbackQueryHandler(handle_page_file_send_choice_callback, pattern="^page_files_"))
     app.add_handler(CallbackQueryHandler(handle_collection_send_all_callback, pattern="^collection_send_all:"))
