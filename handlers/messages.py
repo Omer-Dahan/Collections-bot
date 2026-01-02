@@ -30,7 +30,6 @@ async def handle_new_collection_name_input(message, context: ContextTypes.DEFAUL
         collection_id = db.create_collection(name, user.id)
         active_collections[user.id] = collection_id
         
-        # Clear creating mode
         if "creating_collection_mode" in context.user_data:
             del context.user_data["creating_collection_mode"]
         
@@ -47,14 +46,15 @@ async def handle_new_collection_name_input(message, context: ContextTypes.DEFAUL
 
     except Exception as e:
         logger.error(f"Error creating collection: {e}")
-             context.user_data["temp_collection_name"] = name 
-             keyboard = InlineKeyboardMarkup([
-                 [InlineKeyboardButton("♻️ נסה שם אחר", callback_data="retry_create_collection")],
-                 [InlineKeyboardButton("❌ ביטול", callback_data="back_to_main")]
-             ])
-             await message.reply_text(f"❌ כבר יש לך אוסף בשם '{name}'.", reply_markup=keyboard)
+        if "UNIQUE constraint failed" in str(e):
+            context.user_data["temp_collection_name"] = name 
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("♻️ נסה שם אחר", callback_data="retry_create_collection")],
+                [InlineKeyboardButton("❌ ביטול", callback_data="back_to_main")]
+            ])
+            await message.reply_text(f"❌ כבר יש לך אוסף בשם '{name}'.", reply_markup=keyboard)
         else:
-            await message.reply_text("אירעה שגיאה ביצירת האוסף/.")
+            await message.reply_text("אירעה שגיאה ביצירת האוסף.")
 
 async def handle_import_collection_mode_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle the import mode activation"""

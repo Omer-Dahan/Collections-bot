@@ -344,7 +344,6 @@ async def send_media_groups_in_chunks(bot, chat_id: int, media_visual: list, med
     Send media groups in chunks of 10 to avoid flood limits.
     Also sends text messages.
     """
-    # 1. Send text items first
     if text_items:
         for text in text_items:
             try:
@@ -353,14 +352,12 @@ async def send_media_groups_in_chunks(bot, chat_id: int, media_visual: list, med
             except Exception as e:
                 logger.error(f"Error sending text item: {e}")
 
-    # 2. Send visual media (photos/videos) in chunks of 10
     for i in range(0, len(media_visual), 10):
         chunk = media_visual[i:i + 10]
         await safe_send_media_group(bot, chat_id=chat_id, media=chunk)
         if i + 10 < len(media_visual):
             await asyncio.sleep(4)
     
-    # 3. Send documents in chunks of 10
     for i in range(0, len(media_docs), 10):
         chunk = media_docs[i:i + 10]
         await safe_send_media_group(bot, chat_id=chat_id, media=chunk)

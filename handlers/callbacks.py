@@ -26,7 +26,7 @@ async def handle_select_collection_callback(update: Update, context: ContextType
     await query.answer()
 
     user = query.from_user
-    data = query.data  # format: select_collection:<id>
+    data = query.data
     parts = parse_callback_data(data, "select_collection")
     if not parts:
         return
@@ -39,7 +39,6 @@ async def handle_select_collection_callback(update: Update, context: ContextType
 
     active_collections[user.id] = collection_id
 
-    # Reset batch status for this collection to ensure fresh counter
     if "batch_status" in context.user_data and collection_id in context.user_data["batch_status"]:
         del context.user_data["batch_status"][collection_id]
 
@@ -58,7 +57,7 @@ async def handle_select_item_delete_col_callback(update: Update, context: Contex
     await query.answer()
 
     user = query.from_user
-    data = query.data  # format: select_item_del_col:<id>
+    data = query.data
     parts = parse_callback_data(data, "select_item_del_col")
     if not parts:
         return
@@ -72,7 +71,6 @@ async def handle_select_item_delete_col_callback(update: Update, context: Contex
     if not is_allowed:
         return
 
-    # Activate Item Deletion Mode
     context.user_data["item_delete_mode"] = True
     context.user_data["delete_target_collection_id"] = collection_id
     
@@ -94,7 +92,7 @@ async def handle_browse_page_callback(update: Update, context: ContextTypes.DEFA
     await query.answer()
 
     user = query.from_user
-    data = query.data  # format: browse_page:<collection_id>:<page>
+    data = query.data
     parts = parse_callback_data(data, "browse_page")
     if not parts:
         return
@@ -102,7 +100,6 @@ async def handle_browse_page_callback(update: Update, context: ContextTypes.DEFA
     collection_id = int(parts[0])
     page = int(parts[1])
 
-    # Use centralized function
     await show_collection_page(
         update=update,
         context=context,
@@ -117,7 +114,7 @@ async def handle_scroll_view_callback(update: Update, context: ContextTypes.DEFA
     await query.answer()
 
     user = query.from_user
-    data = query.data  # format: scroll_view:<collection_id>:<item_index>
+    data = query.data
     
     parts = parse_callback_data(data, "scroll_view")
     if not parts:
@@ -233,7 +230,7 @@ async def handle_page_info_callback(update: Update, context: ContextTypes.DEFAUL
     await query.answer()
 
     user = query.from_user
-    data = query.data  # format: page_info:<collection_id>:<page>:<info_page>
+    data = query.data
     
     parts = parse_callback_data(data, "page_info")
     if not parts:
@@ -250,7 +247,6 @@ async def handle_page_info_callback(update: Update, context: ContextTypes.DEFAUL
     if not is_allowed:
         return
 
-    # Edit the message with info page content
     await send_info_page(
         bot=context.bot,
         chat_id=query.message.chat_id,
@@ -268,7 +264,7 @@ async def handle_back_to_info_callback(update: Update, context: ContextTypes.DEF
     await query.answer()
 
     user = query.from_user
-    data = query.data  # format: back_to_info:<collection_id>:<page>:<info_page>
+    data = query.data
     
     parts = parse_callback_data(data, "back_to_info")
     if not parts:
@@ -295,7 +291,6 @@ async def handle_back_to_info_callback(update: Update, context: ContextTypes.DEF
         except Exception:
             pass
     
-    # Send fresh info page
     await send_info_page(
         bot=context.bot,
         chat_id=chat_id,
@@ -317,7 +312,6 @@ async def handle_browse_group_or_select_all_callback(update: Update, context: Co
     is_select_all = False
     idx = 0
     
-    # Detect type
     if data.startswith("browse_group:"):
         parts = parse_callback_data(data, "browse_group")
         collection_id = int(parts[0])
@@ -505,7 +499,7 @@ async def handle_page_file_send_choice_callback(update: Update, context: Context
 async def handle_batch_status_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """הצגת התראה קופצת עם מספר הקבצים שנוספו"""
     query = update.callback_query
-    data = query.data  # batch_status:<collection_id>
+    data = query.data
     
     parts = parse_callback_data(data, "batch_status")
     if not parts:
@@ -529,7 +523,7 @@ async def handle_collection_send_all_callback(update: Update, context: ContextTy
     query = update.callback_query
     await query.answer()
     
-    data = query.data  # collection_send_all:<collection_id>
+    data = query.data
     parts = parse_callback_data(data, "collection_send_all")
     if not parts:
         return
@@ -549,7 +543,6 @@ async def handle_collection_send_all_callback(update: Update, context: ContextTy
         await query.answer("האוסף ריק", show_alert=True)
         return
 
-    # Generate code
     code = create_verification_code(
         context, 
         "send_collection", 
@@ -584,7 +577,6 @@ async def handle_stop_collect_callback(update: Update, context: ContextTypes.DEF
     
     user_id = query.from_user.id
     
-    # Remove from active collections
     if user_id in active_collections:
         del active_collections[user_id]
     
@@ -604,8 +596,6 @@ async def handle_delete_select_collection_callback(update: Update, context: Cont
     await query.answer()
     
     data = query.data
-    # format: delete_collection:<id>
-    
     parts = parse_callback_data(data, "delete_collection")
     if not parts:
         return
@@ -620,7 +610,6 @@ async def handle_delete_select_collection_callback(update: Update, context: Cont
     if not is_allowed:
         return
         
-    # Generate verification code
     code = create_verification_code(
         context, 
         "delete_collection", 
@@ -652,12 +641,9 @@ async def handle_main_menu_button(update: Update, context: ContextTypes.DEFAULT_
     await query.answer()
     
     data = query.data
-    # main_menu:<action>
-    
     action = data.split(":")[1]
     
     if action == "newcollection":
-        # Create dummy message wrapper to reuse flow function
         await new_collection_flow(query.message, query.from_user, context, [], edit_message_id=query.message.message_id)
         
     elif action == "browse":
@@ -679,10 +665,10 @@ async def handle_main_menu_button(update: Update, context: ContextTypes.DEFAULT_
         reset_user_modes(context)
         await access_shared_flow(query.message, query.from_user, context, args=[], edit_message_id=query.message.message_id)
     
-    elif action == "new_collection": # From no active collection error menu
+    elif action == "new_collection":
         await new_collection_flow(query.message, query.from_user, context, [], edit_message_id=query.message.message_id)
 
-    elif action == "select_collection": # From no active collection error menu
+    elif action == "select_collection":
          await list_collections_flow(update, context, edit_message_id=query.message.message_id)
 
 async def handle_back_to_main_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -698,7 +684,6 @@ async def handle_back_to_main_callback(update: Update, context: ContextTypes.DEF
             reply_markup=build_main_menu_keyboard()
         )
     except Exception:
-        # If edit fails, send new
         await query.message.reply_text(
             text=get_main_menu_text(),
             reply_markup=build_main_menu_keyboard()
@@ -710,8 +695,6 @@ async def handle_manage_collection_callback(update: Update, context: ContextType
     await query.answer()
     
     data = query.data
-    # manage_collection:<id>
-    
     parts = parse_callback_data(data, "manage_collection")
     if not parts:
         return
@@ -725,13 +708,11 @@ async def handle_manage_collection_callback(update: Update, context: ContextType
     if not is_allowed:
         return
 
-    # Check if admin is viewing
     is_admin_view = is_admin(query.from_user.id) and collection[2] != query.from_user.id
     
     keyboard = []
     
     if not is_admin_view:
-        # Standard owner options
         keyboard = [
             [InlineKeyboardButton("📤 ייצוא לקובץ (גיבוי)", callback_data=f"export_collection:{collection_id}")],
             [InlineKeyboardButton("🔗 יצירת קישור שיתוף", callback_data=f"share_collection:{collection_id}")],
@@ -739,7 +720,6 @@ async def handle_manage_collection_callback(update: Update, context: ContextType
             [InlineKeyboardButton("🔙 חזור לרשימה", callback_data="back_to_manage")],
         ]
     else:
-        # Admin options
         keyboard = [
             [InlineKeyboardButton("📂 צפייה בתוכן (Admin)", callback_data=f"browse_page:{collection_id}:1")],
             [InlineKeyboardButton("🗑 מחיקת אוסף (Admin)", callback_data=f"delete_collection:{collection_id}")],
@@ -772,11 +752,8 @@ async def handle_share_collection_callback(update: Update, context: ContextTypes
         return
         
     collection_name = collection[1]
-
-    # Get or create share code (logic from OLD.py)
     share_code = db.create_share_link(collection_id, user.id)
     
-    # Log share creation event
     if ENABLE_ARCHIVING:
         asyncio.create_task(
             log_activity(
@@ -790,7 +767,6 @@ async def handle_share_collection_callback(update: Update, context: ContextTypes
             )
         )
     
-    # Get access logs
     logs = db.get_share_access_logs(collection_id)
     access_count = len(logs)
     
@@ -830,7 +806,6 @@ async def handle_share_stats_callback(update: Update, context: ContextTypes.DEFA
     except ValueError:
         return
 
-    # Check ownership
     is_allowed, collection = await validate_access_wrapper(update, context, collection_id)
     if not is_allowed:
         return
